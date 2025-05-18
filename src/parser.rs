@@ -359,11 +359,7 @@ impl<'a> Parser<'a> {
     fn parse_expression(&self, pointer: &mut usize) -> CodeResult<Expression> {
         let term = self.parse_term(pointer)?;
         if self.match_token(pointer, TokenType::As)? {
-            // Ok(AST::CastExpr(
-            //     Box::new(term),
-            //     Box::new(self.parse_type(pointer)?),
-            // ))
-            todo!("Implement CastExpr")
+            Ok(Expression::CastExpr {expr: Box::new(term), typ: self.parse_type(pointer)?})
         } else {
             Ok(term)
         }
