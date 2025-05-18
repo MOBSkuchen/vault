@@ -3,6 +3,7 @@ use crate::filemanager::FileManager;
 use crate::lexer::{CodePosition, Token, TokenType};
 use colorize_rs::AnsiColor;
 use std::fmt;
+use crate::parser::TypesKind;
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -42,7 +43,15 @@ pub enum CodeErrorType {
     FunctionOverloaded,
     NotAType,
     UnallowedVoid,
-    AlreadyExists
+    AlreadyExists,
+    NotAFunction,
+    TypeMismatch,
+    FunctionArgumentCount,
+    FunctionArgumentType,
+    SymbolNotFound,
+    VoidReturn,
+    InvalidVarDef,
+    NonVoidReturn
 }
 
 #[derive(Debug)]
@@ -129,6 +138,29 @@ impl CodeError {
         )
     }
 
+    pub fn void_return(cpos: &CodePosition) -> Self {
+        Self::new(
+            *cpos,
+            CodeErrorType::VoidReturn,
+            "Void function as must-use-expression".to_string(),
+            Some("But was used here".to_string()),
+            "A void-typed function can not be used as an expression".to_string(),
+            vec![],
+        )
+    }
+
+    pub fn invalid_vardef(token: &Token, t: bool) -> Self {
+        let note = (if t {"Add a type"} else {"Add a value"}).to_string();
+        Self::new(
+            token.code_position,
+            CodeErrorType::InvalidVarDef,
+            "Invalid variable definition".to_string(),
+            Some("Concerning this variable".to_string()),
+            "Creating a variable means that a type or a value must be provided".to_string(),
+            vec![note],
+        )
+    }
+
     pub fn new_eof_error() -> Self {
         Self::new(
             CodePosition::eof(),
@@ -151,6 +183,39 @@ impl CodeError {
         )
     }
 
+    pub fn argument_count(token: &Token, got: usize, requires: usize) -> Self {
+        Self::new(
+            token.code_position,
+            CodeErrorType::FunctionArgumentCount,
+            "Wrong amount of arguments".to_string(),
+            Some("help: adjust the argument count you are passing".to_string()),
+            format!("Expected {requires}, but got {got}"),
+            vec![]
+        )
+    }
+
+    pub fn type_mismatch(pos: &CodePosition, got: &TypesKind, requires: &TypesKind, notes: Vec<String>) -> Self {
+        Self::new(
+            *pos,
+            CodeErrorType::FunctionArgumentCount,
+            "Type mismatch".to_string(),
+            Some(format!("This is of type `{got}`")),
+            format!("Expected type `{requires}`, but got type `{got}`"),
+            notes
+        )
+    }
+
+    pub fn non_void_ret(ret_tok: &Token, name: &String, ret: &TypesKind) -> Self {
+        Self::new(
+            ret_tok.code_position,
+            CodeErrorType::NonVoidReturn,
+            "Non void function must return a value".to_string(),
+            Some("Return statement with no value".to_string()),
+            format!("The function `{name}` should return the type `{ret}`, but here it does not return anything, which is only allowed for void functions"),
+            vec![]
+        )
+    }
+
     pub fn missing_ends_error(code_position: CodePosition, token_type: TokenType) -> Self {
         Self::new(
             code_position,
@@ -158,6 +223,28 @@ impl CodeError {
             "Wrong token, expected other".to_string(),
             Some(format!("help: add `{}` here (or after)", token_type)),
             format!("Expected a `{}` at end the statement", token_type),
+            vec![]
+        )
+    }
+
+    pub fn symbol_not_found(token: &Token) -> Self {
+        Self::new(
+            token.code_position,
+            CodeErrorType::SymbolNotFound,
+            "Symbol was not found".to_string(),
+            Some("This symbol".to_string()),
+            format!("The name `{}` is referenced here, but can't be resolved", token.content),
+            vec![]
+        )
+    }
+
+    pub fn symbol_not_a_function(token: &Token) -> Self {
+        Self::new(
+            token.code_position,
+            CodeErrorType::NotAFunction,
+            "Symbol is not a function".to_string(),
+            Some("Called here".to_string()),
+            format!("The name `{}` is found, but not a symbol", token.content),
             vec![]
         )
     }

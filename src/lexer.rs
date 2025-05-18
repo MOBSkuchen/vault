@@ -106,9 +106,9 @@ impl TokenType {
             TokenType::Elif => "elif",
             TokenType::Let => "let",
             TokenType::While => "while",
-            TokenType::I32 => "I32",
-            TokenType::F32 => "F32",
-            TokenType::Void => "Void",
+            TokenType::I32 => "i32",
+            TokenType::F32 => "f32",
+            TokenType::Void => "void",
             TokenType::Or => "or",
         })
             .to_string()
@@ -439,6 +439,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "import" => TokenType::Import,
                     "extern" => TokenType::Extern,
                     "mut" => TokenType::Mut,
+                    "let" => TokenType::Let,
                     "private" => TokenType::Private,
                     "return" => TokenType::Return,
                     "i32" => TokenType::I32,
@@ -540,8 +541,8 @@ pub fn tokenize(content: String) -> CodeResult<Vec<Token>> {
     let mut tokens: Vec<Token> = vec![];
     loop {
         let token = tokenizer(&mut scanner)?;
-        if token.is_some() {
-            tokens.push(token.unwrap())
+        if let Some(item) = token {
+            tokens.push(item)
         } else {
             return Ok(tokens);
         }

@@ -9,7 +9,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, FloatType, FunctionType, 
 use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntValue, PointerValue};
 use crate::comp_errors::{CodeError, CodeResult};
 use crate::lexer::Token;
-use crate::parser::{BinaryOp, Expression, FunctionMode, Types, TypesKind, AST};
+use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
 
 enum PrimitiveErrors {
     TypeVoidUnallowed
@@ -45,12 +45,13 @@ pub struct Function<'ctx> {
     compiler: &'ctx Compiler<'ctx>,
     function_value: FunctionValue<'ctx>,
     ret: &'ctx TypesKind,
-    function_scope: Namespace<'ctx>
+    function_scope: Namespace<'ctx>,
+    name: String,
 }
 
 impl<'ctx> Function<'ctx> {
-    pub fn new(compiler: &'ctx Compiler<'ctx>, function_value: FunctionValue<'ctx>, ret: &'ctx TypesKind) -> Self {
-        Self { compiler, function_value, ret, function_scope: Namespace::new() }
+    pub fn new(compiler: &'ctx Compiler<'ctx>, function_value: FunctionValue<'ctx>, ret: &'ctx TypesKind, name: String) -> Self {
+        Self { compiler, function_value, ret, function_scope: Namespace::new(), name }
     }
 
     pub fn new_block(&self, block_name: &str) -> BasicBlock<'ctx> {
@@ -209,48 +210,55 @@ impl<'ctx> Compiler<'ctx> {
     fn null(&self) -> IntValue<'ctx> {
         self.context.i32_type().const_zero()
     }
+    
 
     fn visit_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace<'_>, expr: Expression, 
                       type_hint: Option<&TypesKind>, must_use: bool) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
-        Ok(match expr {
-            Expression::Identifier(name) => {
-                let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).expect("Variable does not exist");
+        Ok(match expr.expression {
+            ExpressionKind::Identifier(name) => {
+                let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).ok_or_else(|| {CodeError::symbol_not_found(name)})?;
                 let real_type = self.convert_type_normal(&def.0).map_err(|e| {CodeError::void_type(name)})?;
                 (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, &name.content).expect("Failed to load")), def.0.clone())
             }
-            Expression::IntNumber { value, token } => {
+            ExpressionKind::IntNumber { value, token } => {
                 let (hint, sign, vt) = hinted_int(type_hint, self.context);
                 (Box::new(hint.const_int(value, sign).as_basic_value_enum()), vt)
             }
-            Expression::FloatNumber { value, token } => {
+            ExpressionKind::FloatNumber { value, token } => {
                 let(hint, vt) = hinted_float(type_hint, self.context);
                 (Box::new(hint.const_float(value).as_basic_value_enum()), vt)
             }
-            Expression::BinaryOp { lhs, op, rhs } => {
-                let (lhs, l_typ) = self.visit_expr(function, global_scope, *lhs, type_hint, true)?;
-                let (rhs, r_typ) = self.visit_expr(function, global_scope, *rhs, Some(&l_typ), true)?;
+            ExpressionKind::BinaryOp { lhs, op, rhs } => {
+                let cpos = rhs.code_position;
+                let (lhs_val, l_typ) = self.visit_expr(function, global_scope, *lhs, type_hint, true)?;
+                let (rhs_val, r_typ) = self.visit_expr(function, global_scope, *rhs, Some(&l_typ), true)?;
                 if l_typ != r_typ {
-                    panic!("Can not do a bin-op with different types!")
+                    return Err(CodeError::type_mismatch(&cpos, &r_typ, &l_typ, vec!["This is because the right side must have the same type as the left side".to_string()]));
                 }
-                (Box::new(self.visit_bin_op(lhs, rhs, op.1, &l_typ)?.as_basic_value_enum()), l_typ)
+                (Box::new(self.visit_bin_op(lhs_val, rhs_val, op.1, &l_typ)?.as_basic_value_enum()), l_typ)
             }
-            Expression::FunctionCall { name, arguments } => {
-                let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).expect("Variable does not exist");
+            ExpressionKind::FunctionCall { name, arguments } => {
+                let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).ok_or_else(|| {
+                    CodeError::symbol_not_found(name)
+                })?;
                 match &def.0 {
                     TypesKind::Function { params, ret } => {
                         if let Some(hint) = type_hint {
                             if must_use && *hint == TypesKind::Void {
-                                panic!("Void type may not be used as a return value!! This creates an error because the value of this call must be used")
+                                return Err(CodeError::void_return(&expr.code_position));
                             }
                         }
                         let mut h_args = vec![];
-                        for (count, arg) in arguments.into_iter().enumerate() {
-                            let (value, typ) = self.visit_expr(function, global_scope, arg, Some(&params[count]), true)?;
-                            if typ != params[count] {panic!("The function signature expects a value of another type here")}
-                            h_args.push(value.deref().as_basic_value_enum().into());
+                        if arguments.len() != params.len() {
+                            return Err(CodeError::argument_count(name, arguments.len(), params.len()))
                         }
-                        if h_args.len() != params.len() {
-                            panic!("The function expects a different amount of arguments")
+                        for (count, arg) in arguments.into_iter().enumerate() {
+                            let cpos = arg.code_position;
+                            let (value, typ) = self.visit_expr(function, global_scope, arg, Some(&params[count]), true)?;
+                            if typ != params[count] {
+                                return Err(CodeError::type_mismatch(&cpos, &typ, &params[count], vec![]));
+                            }
+                            h_args.push(value.deref().as_basic_value_enum().into());
                         }
                         // Call function, if it does not return a value (Void function) return null
                         // In that case the return value will NOT be used, because of other Void checks
@@ -258,48 +266,64 @@ impl<'ctx> Compiler<'ctx> {
                             .expect("Failed to get function - which should exist btw").0, h_args.as_slice(), "").expect("Failed to load");
                         (Box::new(call.try_as_basic_value().left_or(self.null().as_basic_value_enum())), ret.as_ref().clone())
                     }
-                    _ => panic!("This must be a function")
+                    _ => Err(CodeError::symbol_not_a_function(name))?
                 }
             },
-            Expression::String(_) => {todo!("Implement")}
-            Expression::Type { .. } => {todo!("Implement")}
-            Expression::CastExpr { .. } => {todo!("Implement")}
+            ExpressionKind::String(_) => {todo!("Implement")}
+            ExpressionKind::Type { .. } => {todo!("Implement")}
+            ExpressionKind::CastExpr { .. } => {todo!("Implement")}
         })
     }
 
     fn visit_statement(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace) -> CodeResult<()> {
         match statement {
             AST::FunctionDef { .. } => panic!("Function definition is not allowed here (YET)"),
-            AST::VariableSet { name, value, typ } => {
-                // let typ = if let Some(expr) = value {
-                //     let (value, inferred) = self.visit_expr(function, global_scope, expr, typ, true);
-                //     if typ.unwrap().kind != inferred.kind {panic!("Returned value does not match variable signature")}
-                //     typ.unwrap()
-                // } else {typ.unwrap()};
-                // let ptr = self.builder.build_alloca(self.convert_type_normal(&typ).as_basic_type_enum(), &name).expect("Failed to create pointer");
-                // self.builder.build_store(ptr, value.as_basic_value_enum()).expect("Failed to store value at pointer");
-                // function.function_scope.definitions.insert(name.content.clone(), (typ, ptr));
+            AST::VariableDef { name, value, typ } => {
+                let val = if let Some(value) = value {
+                    let cpos = &value.code_position.clone();
+                    let (expr, typ) = if let Some(typ) = typ {
+                        let (expr, got_typ) = self.visit_expr(function, global_scope, value, Some(&typ.kind), true)?;
+                        if got_typ != typ.kind { return Err(CodeError::type_mismatch(cpos, &got_typ, &typ.kind, vec![])) }
+                        (expr, got_typ)
+                    } else {
+                        self.visit_expr(function, global_scope, value, None, true)?
+                    };
+                    let pointer = self.builder.build_alloca(self.convert_type_normal(&typ)
+                    .map_err(|_| {CodeError::void_type(name)})?.as_basic_type_enum(), "").expect("Can not allocate for var-define");
+                    self.builder.build_store(pointer, expr.as_basic_value_enum()).expect("Failed to store value of variable define");
+                    (typ, pointer)
+                } else {
+                    let typ = typ.unwrap();
+                    (typ.kind.clone(), self.builder.build_alloca(self.convert_type_normal(&typ.kind)
+                    .map_err(|_| {CodeError::void_type(name)})?.as_basic_type_enum(), "").expect("Can not allocate for var-declare"))
+                };
+                function.function_scope.definitions.insert(name.content.clone(), val);
             }
-            AST::Expression { expr, position } => { 
+            AST::VariableReassign { name, value } => {
+                let cpos = &value.code_position.clone();
+                let (typ, ptr) = function.function_scope.definitions.get(&name.content).ok_or_else(|| {CodeError::symbol_not_found(name)})?;
+                let (data, got_type) = self.visit_expr(function, global_scope, value, Some(typ), true)?;
+                if got_type != *typ { return Err(CodeError::type_mismatch(cpos, &got_type, typ, vec![format!("This is because `{}` was originally declared as {typ}", name.content)])) } 
+                self.builder.build_store(*ptr, data.as_basic_value_enum()).expect("Failed to store value of variable define");
+            }
+            AST::Expression { expr } => { 
                 self.visit_expr(function, global_scope, expr, None, false)?;
             }
-            AST::Return(value) => {
+            AST::Return(value, ret_tok) => {
                 if let Some(expr) = value {
-                    let (value, typ) = self.visit_expr(function, global_scope, expr, Some(&function.ret), true)?;
-                    if typ != *function.ret {panic!("Returned value does not match function signature")}
-                    self.builder.build_return(Some(value.deref())).expect("Failed to return");
+                    let cpos = &expr.code_position.clone();
+                    let (n_value, typ) = self.visit_expr(function, global_scope, expr, Some(function.ret), true)?;
+                    if typ != *function.ret {
+                        return Err(CodeError::type_mismatch(cpos, &typ, function.ret, vec![format!("This is because the function `{}` has the return-type {}", function.name, function.ret)]))
+                    }
+                    self.builder.build_return(Some(n_value.deref())).expect("Failed to return");
                 } else {
-                    if *function.ret != TypesKind::Void {panic!("This function must return a value!")}
+                    if *function.ret != TypesKind::Void {
+                        return Err(CodeError::non_void_ret(ret_tok, &function.name, function.ret))
+                    }
                     self.builder.build_return(None).expect("Failed to return NONE");
                 }
             },
-            // AST::VarReassign { name, value } => {
-            //     if let Some(addr) = check_ls_gs_defs(&name, &function.function_scope, global_scope) {
-            //         let (value, typ) = self.visit_expr(function, global_scope, value, Some(&addr.0), true);
-            //         if addr.0 != typ { panic!("Variable has been reassigned with another type; you may create a new variable with a different type, but the same name tho") }
-            //         self.builder.build_store(addr.1, value.as_basic_value_enum()).expect("Failed to store reassign");
-            //     }
-            // }
         }
         Ok(())
     }
@@ -318,7 +342,7 @@ impl<'ctx> Compiler<'ctx> {
         }
         
         let function_value = module.add_function(&name.content, fn_type, Some(fmode.into()));
-        let mut function = Function::new(self, function_value, &return_type.kind);
+        let mut function = Function::new(self, function_value, &return_type.kind, name.content.clone());
 
         global_scope.functions.insert(name.content.clone(), (function_value, body.is_some()));
         global_scope.definitions.insert(name.content.clone(), (TypesKind::Function {ret: Box::from(return_type.kind.clone()), 
@@ -339,7 +363,7 @@ impl<'ctx> Compiler<'ctx> {
         for branch in ast {
             match branch {
                 AST::FunctionDef { ret, fmode, name, params, body } => {
-                    self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, Some(body))?;
+                    self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body)?;
                 }
                 _ => panic!("This is not a top-level statement!"),
             }

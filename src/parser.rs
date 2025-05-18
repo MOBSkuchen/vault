@@ -1,3 +1,5 @@
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use inkwell::module::Linkage;
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
@@ -186,14 +188,14 @@ impl<'a> Parser<'a> {
         self.consume(pointer, TokenType::Colon, None)?;
         let ret = self.parse_type(pointer)?;
 
-        let body = self.parse_block(pointer)?;
+        let body = if self.match_token(pointer, TokenType::SemiColon)? { None } else { Some(self.parse_block(pointer)?) };
 
         Ok(AST::FunctionDef {
             name,
             fmode,
             ret,
             params: args,
-            body,
+            body
         })
     }
 
@@ -243,15 +245,15 @@ impl<'a> Parser<'a> {
             }
             self.consume(pointer, TokenType::Comma, Some("Add a comma".to_string()))?;
         }
-        Ok(Expression::FunctionCall {name, arguments})
+        Ok((ExpressionKind::FunctionCall {name, arguments}).into_expression(name.code_position.merge(self.tokens[*pointer - 1].code_position)))
     }
 
     fn parse_return(&self, pointer: &mut usize) -> CodeResult<AST> {
         self.consume(pointer, TokenType::Return, None)?;
         if self.multi_match_token(pointer, vec![TokenType::SemiColon, TokenType::RBrace])? {
-            Ok(AST::Return(None))
+            Ok(AST::Return(None, &self.tokens[*pointer - 1]))
         } else {
-            Ok(AST::Return(Some(self.parse_expression(pointer)?)))
+            Ok(AST::Return(Some(self.parse_expression(pointer)?), &self.tokens[*pointer - 1]))
         }
     }
 
@@ -282,10 +284,10 @@ impl<'a> Parser<'a> {
             match token.token_type {
                 TokenType::Identifier => {
                     if self.match_next_token(pointer, TokenType::LParen)? {
-                        let a = *pointer;
-                        let expr = self.parse_function_call(pointer)?;
-                        let position = self.codepos_from_space(a, pointer, 1);
-                        Ok(AST::Expression { expr, position })
+                        Ok(AST::Expression { expr: self.parse_function_call(pointer)? })
+                    } else if self.match_next_token(pointer, TokenType::Equals)? {
+                        self.advance(pointer);
+                        Ok(AST::VariableReassign {name: token, value: self.parse_expression(pointer)?})
                     } else {
                         let a = *pointer;
                         let res = self.parse_expression(pointer);
@@ -294,7 +296,7 @@ impl<'a> Parser<'a> {
                             cpos,
                             None,
                         ));
-                        Ok(AST::Expression { expr: res?, position: cpos })
+                        Ok(AST::Expression { expr: res? })
                     }
                 }
                 TokenType::NumberInt | TokenType::NumberFloat => {
@@ -305,7 +307,21 @@ impl<'a> Parser<'a> {
                         cpos,
                         None,
                     ));
-                    Ok(AST::Expression { expr: res?, position: cpos })
+                    Ok(AST::Expression { expr: res? })
+                }
+                TokenType::Let => {
+                    *pointer += 1;
+                    let name = self.consume(pointer, TokenType::Identifier, None)?;
+                    let typ = if self.match_token(pointer, TokenType::Colon)? {
+                        Some(self.parse_type(pointer)?)
+                    } else {None};
+                    let value = if self.match_token(pointer, TokenType::Equals)? {
+                        Some(self.parse_expression(pointer)?)
+                    } else {None};
+                    if typ.is_none() && value.is_none() {
+                        return Err(CodeError::invalid_vardef(name, typ.is_some()))
+                    }
+                    Ok(AST::VariableDef {name, typ, value})
                 }
                 TokenType::Return => self.parse_return(pointer),
                 _o => Err(CodeError::new_unexpected_token_error(
@@ -358,9 +374,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&self, pointer: &mut usize) -> CodeResult<Expression> {
+        let a = pointer.clone();
         let term = self.parse_term(pointer)?;
         if self.match_token(pointer, TokenType::As)? {
-            Ok(Expression::CastExpr {expr: Box::new(term), typ: self.parse_type(pointer)?})
+            let cpos = self.codepos_from_space(a, pointer, 1);
+            Ok((ExpressionKind::CastExpr {expr: Box::new(term), typ: self.parse_type(pointer)?}).into_expression(cpos))
         } else {
             Ok(term)
         }
@@ -374,7 +392,8 @@ impl<'a> Parser<'a> {
                 TokenType::Plus | TokenType::Minus => {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_factor(pointer)?;
-                    node = Expression::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) };
+                    let cpos = node.code_position.merge(right.code_position);
+                    node = (ExpressionKind::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) }).into_expression(cpos);
                 }
                 _ => break,
             }
@@ -390,7 +409,8 @@ impl<'a> Parser<'a> {
                 TokenType::Star | TokenType::Slash => {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_primary(pointer)?;
-                    node = Expression::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) };
+                    let cpos = node.code_position.merge(right.code_position);
+                    node = (ExpressionKind::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) }).into_expression(cpos);
                 }
                 _ => break,
             }
@@ -401,16 +421,16 @@ impl<'a> Parser<'a> {
     fn parse_primary(&self, pointer: &mut usize) -> CodeResult<Expression> {
         if let Some(token) = self.advance(pointer) {
             match token.token_type {
-                TokenType::NumberInt => Ok(Expression::IntNumber { value: token.content.parse().unwrap(), token }),
-                TokenType::NumberFloat => Ok(Expression::FloatNumber { value: token.content.parse().unwrap(), token }),
+                TokenType::NumberInt => Ok(Expression { expression: ExpressionKind::IntNumber { value: token.content.parse().unwrap(), token }, code_position: token.code_position }),
+                TokenType::NumberFloat => Ok(Expression { expression: ExpressionKind::FloatNumber { value: token.content.parse().unwrap(), token }, code_position: token.code_position }),
                 TokenType::Identifier => {
                     if self.match_next_token(pointer, TokenType::LParen)? {
                         self.parse_function_call(pointer)
                     } else {
-                        Ok(Expression::Identifier(token))
+                        Ok(Expression {expression: ExpressionKind::Identifier(token), code_position: token.code_position})
                     }
                 }
-                TokenType::String => Ok(Expression::String(token)),
+                TokenType::String => Ok(Expression {expression: ExpressionKind::String(token), code_position: token.code_position}),
                 TokenType::LParen => {
                     let expr = self.parse_expression(pointer)?;
                     if self.match_token(pointer, TokenType::RParen)? {
@@ -437,13 +457,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&self, pointer: &mut usize) -> CodeResult<Types> {
-        let kind = 
+        let kind =
             if self.match_token(pointer, TokenType::I32)? { Ok(TypesKind::I32) }
             else if self.match_token(pointer, TokenType::F32)? { Ok(TypesKind::F32) }
             else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))};
-        
+
         Ok(Types::new(kind?, &self.tokens[*pointer]))
     }
 }
@@ -516,6 +536,18 @@ pub enum TypesKind {
     Function {ret: Box<TypesKind>, params: Vec<TypesKind>}
 }
 
+impl Display for TypesKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", match self {
+            TypesKind::I32 => "i32",
+            TypesKind::F32 => "f32",
+            TypesKind::Void => "void",
+            TypesKind::Struct { name } => name.as_str(),
+            TypesKind::Function { .. } => "function"
+        })
+    }
+}
+
 #[derive(Debug, Hash, Clone)]
 pub struct Types<'a> {
     pub kind: TypesKind,
@@ -529,7 +561,7 @@ impl<'a> Types<'a> {
 }
 
 #[derive(Debug)]
-pub enum Expression<'a> {
+pub enum ExpressionKind<'a> {
     IntNumber {
         value: u64,
         token: &'a Token,
@@ -546,16 +578,29 @@ pub enum Expression<'a> {
     FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
 }
 
+impl<'a> ExpressionKind<'a> {
+    pub fn into_expression(self, cpos: CodePosition) -> Expression<'a> {
+        Expression {expression: self, code_position: cpos}
+    }
+}
+
+#[derive(Debug)]
+pub struct Expression<'a> {
+    pub expression: ExpressionKind<'a>,
+    pub code_position: CodePosition
+}
+
 #[derive(Debug)]
 pub enum AST<'a> {
-    Expression { expr: Expression<'a >, position: CodePosition },
+    Expression { expr: Expression<'a > },
     FunctionDef {
         name: & 'a Token,
         fmode: FunctionMode,
         ret: Types<'a>,
         params: Vec<(& 'a Token, Types<'a>)>,
-        body: Vec<AST<'a>>,
+        body: Option<Vec<AST<'a>>>,
     },
-    VariableSet { name: & 'a Token, value: Option<Expression<'a>>, typ: Option<Types<'a>> },
-    Return(Option<Expression<'a>>),
+    VariableDef { name: & 'a Token, value: Option<Expression<'a>>, typ: Option<Types<'a>> },
+    VariableReassign { name: & 'a Token, value: Expression<'a> },
+    Return(Option<Expression<'a>>, &'a Token),
 }
