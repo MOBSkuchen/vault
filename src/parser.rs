@@ -1,3 +1,4 @@
+use inkwell::module::Linkage;
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::filemanager::FileManager;
@@ -191,12 +192,12 @@ impl<'a> Parser<'a> {
             name,
             fmode,
             ret,
-            args,
+            params: args,
             body,
         })
     }
 
-    fn parse_block(&self, pointer: &mut usize) -> CodeResult<Vec<Box<AST>>> {
+    fn parse_block(&self, pointer: &mut usize) -> CodeResult<Vec<AST>> {
         self.consume(pointer, TokenType::LBrace, None)?;
 
         let mut statements = Vec::new();
@@ -207,7 +208,7 @@ impl<'a> Parser<'a> {
             }
 
             let stmt = self.parse_statement(pointer)?;
-            statements.push(Box::new(stmt));
+            statements.push(*Box::new(stmt));
 
             if !self.match_token(pointer, TokenType::SemiColon)? {
                 break;
@@ -373,7 +374,7 @@ impl<'a> Parser<'a> {
                 TokenType::Plus | TokenType::Minus => {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_factor(pointer)?;
-                    node = Expression::BinaryOp { lhs: Box::new(node), op, rhs: Box::new(right) };
+                    node = Expression::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) };
                 }
                 _ => break,
             }
@@ -389,7 +390,7 @@ impl<'a> Parser<'a> {
                 TokenType::Star | TokenType::Slash => {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_primary(pointer)?;
-                    node = Expression::BinaryOp { lhs: Box::new(node), op, rhs: Box::new(right) };
+                    node = Expression::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) };
                 }
                 _ => break,
             }
@@ -438,11 +439,51 @@ impl<'a> Parser<'a> {
     fn parse_type(&self, pointer: &mut usize) -> CodeResult<Types> {
         let kind = 
             if self.match_token(pointer, TokenType::I32)? { Ok(TypesKind::I32) }
-            else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::I32) }
+            else if self.match_token(pointer, TokenType::F32)? { Ok(TypesKind::F32) }
+            else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))};
         
         Ok(Types::new(kind?, &self.tokens[*pointer]))
+    }
+}
+
+#[derive(Debug, Clone)]
+#[derive(Hash)]
+pub enum BinaryOp {
+    Eq,
+    Neq,
+    Gt,
+    Lt,
+    Gte,
+    Lte,
+    Not,
+    Add,
+    Sub,
+    Div,
+    Mul,
+    And,
+    Or
+}
+
+impl TokenType {
+    fn to_binop(&self) -> Option<BinaryOp> {
+        match self {
+            TokenType::Star => Some(BinaryOp::Mul),
+            TokenType::Minus => Some(BinaryOp::Sub),
+            TokenType::Plus => Some(BinaryOp::Add),
+            TokenType::Slash => Some(BinaryOp::Div),
+            TokenType::And => Some(BinaryOp::And),
+            TokenType::Or => Some(BinaryOp::Or),
+            TokenType::Exclamation => Some(BinaryOp::Not),
+            TokenType::DoubleEquals => Some(BinaryOp::Eq),
+            TokenType::NotEquals => Some(BinaryOp::Neq),
+            TokenType::Greater => Some(BinaryOp::Gt),
+            TokenType::Lesser => Some(BinaryOp::Lt),
+            TokenType::GreaterEquals => Some(BinaryOp::Gte),
+            TokenType::LesserEquals => Some(BinaryOp::Lte),
+            _ => None
+        }
     }
 }
 
@@ -454,7 +495,19 @@ pub enum FunctionMode {
     Default,
 }
 
+impl Into<Linkage> for FunctionMode {
+    fn into(self) -> Linkage {
+        match self {
+            FunctionMode::Private => {Linkage::Private}
+            FunctionMode::Export => {Linkage::External}
+            FunctionMode::Extern => {Linkage::AvailableExternally}
+            FunctionMode::Default => {Linkage::External}
+        }
+    }
+}
+
 #[derive(Debug, Hash, Clone)]
+#[derive(PartialEq)]
 pub enum TypesKind {
     I32,
     F32,
@@ -464,9 +517,9 @@ pub enum TypesKind {
 }
 
 #[derive(Debug, Hash, Clone)]
-struct Types<'a> {
-    kind: TypesKind,
-    token: &'a Token
+pub struct Types<'a> {
+    pub kind: TypesKind,
+    pub token: &'a Token
 }
 
 impl<'a> Types<'a> {
@@ -475,36 +528,34 @@ impl<'a> Types<'a> {
     }
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug)]
 pub enum Expression<'a> {
     IntNumber {
         value: u64,
         token: &'a Token,
     },
     FloatNumber {
-        value: u64,
+        value: f64,
         token: &'a Token,
     },
     Identifier(&'a Token),
     String(&'a Token),
     Type { typ: Types<'a>, token: &'a Token },
-    // LHS, Opcode, RHS
-    BinaryOp {lhs: Box<Expression<'a>>, op: &'a Token, rhs: Box<Expression<'a>>},
-    // Expr, Type
+    BinaryOp { lhs: Box<Expression<'a>>, op: (&'a Token, BinaryOp), rhs: Box<Expression<'a>> },
     CastExpr { expr: Box<Expression<'a>>, typ: Types<'a> },
     FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug)]
 pub enum AST<'a> {
     Expression { expr: Expression<'a >, position: CodePosition },
     FunctionDef {
         name: & 'a Token,
         fmode: FunctionMode,
         ret: Types<'a>,
-        args: Vec<(& 'a Token, Types<'a>)>,
-        body: Vec<Box<AST<'a>>>,
+        params: Vec<(& 'a Token, Types<'a>)>,
+        body: Vec<AST<'a>>,
     },
-    VariableSet { name: & 'a Token, value: Expression<'a>, typ: Types<'a> },
+    VariableSet { name: & 'a Token, value: Option<Expression<'a>>, typ: Option<Types<'a>> },
     Return(Option<Expression<'a>>),
 }

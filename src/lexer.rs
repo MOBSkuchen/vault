@@ -53,6 +53,7 @@ pub enum TokenType {
     For,
     While,
     Let,
+    Or,
 
     // Virtual types
     Expression,
@@ -108,6 +109,7 @@ impl TokenType {
             TokenType::I32 => "I32",
             TokenType::F32 => "F32",
             TokenType::Void => "Void",
+            TokenType::Or => "or",
         })
             .to_string()
     }
@@ -439,6 +441,9 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "mut" => TokenType::Mut,
                     "private" => TokenType::Private,
                     "return" => TokenType::Return,
+                    "i32" => TokenType::I32,
+                    "f32" => TokenType::F32,
+                    "void" => TokenType::Void,
                     _ => TokenType::Identifier,
                 };
                 return Ok(Some(Token {
