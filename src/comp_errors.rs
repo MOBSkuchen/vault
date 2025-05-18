@@ -41,6 +41,8 @@ pub enum CodeErrorType {
     MissingTokenError,
     FunctionOverloaded,
     NotAType,
+    UnallowedVoid,
+    AlreadyExists
 }
 
 #[derive(Debug)]
@@ -116,6 +118,17 @@ impl CodeError {
         )
     }
 
+    pub fn void_type(token: &Token) -> Self {
+        Self::new(
+            token.code_position,
+            CodeErrorType::UnallowedVoid,
+            "Void type is only allowed for functions".to_string(),
+            Some("But was used here".to_string()),
+            "Use a different type, but not void".to_string(),
+            vec![],
+        )
+    }
+
     pub fn new_eof_error() -> Self {
         Self::new(
             CodePosition::eof(),
@@ -161,6 +174,17 @@ impl CodeError {
             Some("Function mode set here".to_string()),
             "Can not have multiple function modes".to_string(),
             vec!["Remove one of the modifiers".to_string()],
+        )
+    }
+
+    pub fn already_exists(f: bool, symbol: &Token) -> Self {
+        Self::new(
+            symbol.code_position,
+            CodeErrorType::FunctionOverloaded,
+            "A symbol with the same name already exists".to_string(),
+            Some("This".to_string()),
+            "Symbols must be unique".to_string(),
+            vec!["Remove one of the them".to_string()],
         )
     }
 
