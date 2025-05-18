@@ -437,8 +437,8 @@ impl<'a> Parser<'a> {
 
     fn parse_type(&self, pointer: &mut usize) -> CodeResult<Types> {
         let kind = 
-            if self.match_token(pointer, TokenType::i32)? { Ok(TypesKind::I32) }
-            else if self.match_token(pointer, TokenType::void)? { Ok(TypesKind::I32) }
+            if self.match_token(pointer, TokenType::I32)? { Ok(TypesKind::I32) }
+            else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::I32) }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))};
         

@@ -16,10 +16,10 @@ pub enum TokenType {
     String,
     NumberInt,
     NumberFloat,
-    
-    i32,
-    f32,
-    void,
+
+    I32,
+    F32,
+    Void,
 
     LParen,
     RParen,
@@ -105,9 +105,9 @@ impl TokenType {
             TokenType::Elif => "elif",
             TokenType::Let => "let",
             TokenType::While => "while",
-            TokenType::i32 => "i32",
-            TokenType::f32 => "f32",
-            TokenType::void => "void",
+            TokenType::I32 => "I32",
+            TokenType::F32 => "F32",
+            TokenType::Void => "Void",
         })
             .to_string()
     }

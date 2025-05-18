@@ -1,9 +1,8 @@
 use crate::codeviz::print_code_error;
 use crate::filemanager::FileManager;
 use crate::lexer::{CodePosition, Token, TokenType};
-use colorize_rs::{AnsiColor, Color};
+use colorize_rs::AnsiColor;
 use std::fmt;
-use std::fmt::format;
 
 #[derive(Debug)]
 pub enum CompilerError {
