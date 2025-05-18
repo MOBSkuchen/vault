@@ -1,572 +1,514 @@
-use std::collections::VecDeque;
-use std::str::Chars;
+use crate::codeviz::print_code_warn;
+use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
+use crate::filemanager::FileManager;
+use crate::lexer::{CodePosition, Token, TokenType};
 
-#[derive(Debug, Clone, PartialEq)]
-enum Token {
-    I32,
-    F32,
-    Struct,
-    Identifier(String),
-    LParen,
-    RParen,
-    LBrace,
-    RBrace,
-    Semicolon,
-    Comma,
-    Asterisk,
-    Ref,
-    And,
-    Or,
-    Not,
-    Pipe,
-    Eq,
-    DEq,
-    NEq,
-    Gt,
-    Lt,
-    Gte,
-    Lte,
-    Return,
-    If,
-    Else,
-    For,
-    While,
-    Break,
-    Void,
-    EOF,
-    NumberInt(i64),
-    NumberFloat(f64),
-    Slash,
-    Minus,
-    Plus,
+static STATEMENT_TOKENS: [TokenType; 13] = [
+    TokenType::If,
+    TokenType::Else,
+    TokenType::Elif,
+    TokenType::For,
+    TokenType::While,
+    TokenType::Let,
+    TokenType::Return,
+    TokenType::Identifier,
+    TokenType::String,
+    TokenType::NumberInt,
+    TokenType::NumberFloat,
+    TokenType::LParen,
+    TokenType::RParen
+];
+
+enum EndSAR {
+    Brace(CodePosition),
+    Semicolon(CodePosition),
+    Nothing
 }
 
-#[derive(Debug, Clone)]
-pub enum Expression {
-    Identifier(String),
-    IntNumber(i64),
-    FloatNumber(f64),
-    Binary {
-        op: BinaryOp,
-        left: Box<Expression>,
-        right: Box<Expression>,
-    },
-    FunctionCall {
-        name: String,
-        arguments: Vec<Expression>
-    },
-}
-
-#[derive(Debug, Clone)]
-pub enum BinaryOp {
-    Eq,
-    Neq,
-    Gt,
-    Lt,
-    Gte,
-    Lte,
-    Not,
-    Add,
-    Sub,
-    Div,
-    Mul,
-    And,
-    Or
-}
-
-impl From<&Token> for Option<BinaryOp> {
-    fn from(value: &Token) -> Self {
-        match value {
-            Token::Asterisk => Some(BinaryOp::Mul),
-            Token::Minus => Some(BinaryOp::Sub),
-            Token::Plus => Some(BinaryOp::Add),
-            Token::Slash => Some(BinaryOp::Div),
-            Token::And => Some(BinaryOp::And),
-            Token::Or => Some(BinaryOp::Or),
-            Token::Not => Some(BinaryOp::Not),
-            Token::DEq => Some(BinaryOp::Eq),
-            Token::NEq => Some(BinaryOp::Neq),
-            Token::Gt => Some(BinaryOp::Gt),
-            Token::Lt => Some(BinaryOp::Lt),
-            Token::Gte => Some(BinaryOp::Gte),
-            Token::Lte => Some(BinaryOp::Lte),
-            _ => None
-        }
-    }
-}
-
-#[derive(Clone)]
-#[derive(Debug)]
-pub enum Types {
-    I32,
-    F32,
-    Void,
-    Struct {name: String}
-}
-
-#[derive(Debug, Clone)]
-pub enum AST {
-    FunctionDef {
-        return_type: Types,
-        name: String,
-        params: Vec<(Types, String)>,
-        body: Option<Vec<AST>>
-    },
-    VarDef {
-        var_type: Types,
-        name: String,
-        value: Option<Expression>
-    },
-    Expr {
-        expr: Expression
-    },
-    Return(Expression)
-}
-
-impl From<Expression> for AST {
-    fn from(value: Expression) -> Self {
-        AST::Expr {expr: value}
-    }
-}
-
-fn token_is_type_like(tok: &Token) -> bool {
-    match tok {
-        Token::I32 => true,
-        Token::F32 => true,
-        Token::Identifier(_) => true,
-        _ => false
-    }
-}
-
-struct Lexer<'a> {
-    input: Chars<'a>,
-    current: Option<char>,
-}
-
-impl<'a> Lexer<'a> {
-    fn new(src: &'a str) -> Self {
-        let mut lexer = Lexer {
-            input: src.chars(),
-            current: None,
-        };
-        lexer.bump();
-        lexer
-    }
-
-    fn bump(&mut self) {
-        self.current = self.input.next();
-    }
-
-    fn next_token(&mut self) -> Token {
-        while let Some(c) = self.current {
-            match c {
-                ' ' | '\n' | '\t' | '\r' => self.bump(),
-                '(' => {
-                    self.bump();
-                    return Token::LParen;
-                }
-                ')' => {
-                    self.bump();
-                    return Token::RParen;
-                }
-                '{' => {
-                    self.bump();
-                    return Token::LBrace;
-                }
-                '}' => {
-                    self.bump();
-                    return Token::RBrace;
-                }
-                ';' => {
-                    self.bump();
-                    return Token::Semicolon;
-                }
-                ',' => {
-                    self.bump();
-                    return Token::Comma;
-                }
-                '*' => {
-                    self.bump();
-                    return Token::Asterisk;
-                }
-                '+' => {
-                    self.bump();
-                    return Token::Plus;
-                }
-                '-' => {
-                    self.bump();
-                    return Token::Minus;
-                }
-                '/' => {
-                    self.bump();
-                    return Token::Slash;
-                }
-                '&' => {
-                    self.bump();
-                    if self.current == Some('&') {
-                        self.bump();
-                        return Token::And;
-                    } else {
-                        return Token::Ref;
-                    }
-                }
-                '=' => {
-                    self.bump();
-                    if self.current == Some('=') {
-                        self.bump();
-                        return Token::DEq;
-                    } else {
-                        return Token::Eq;
-                    }
-                }
-                '>' => {
-                    self.bump();
-                    if self.current == Some('=') {
-                        self.bump();
-                        return Token::Gte;
-                    } else {
-                        return Token::Gt;
-                    }
-                }
-                '<' => {
-                    self.bump();
-                    if self.current == Some('=') {
-                        self.bump();
-                        return Token::Lte;
-                    } else {
-                        return Token::Lt;
-                    }
-                }
-                '!' => {
-                    self.bump();
-                    if self.current == Some('=') {
-                        self.bump();
-                        return Token::NEq;
-                    } else {
-                        return Token::Not;
-                    }
-                }
-                '|' => {
-                    self.bump();
-                    if self.current == Some('|') {
-                        self.bump();
-                        return Token::Or;
-                    } else {
-                        return Token::Pipe;
-                    }
-                }
-                '0'..='9' => return self.lex_number(),
-                'a'..='z' | 'A'..='Z' | '_' => return self.lex_identifier(),
-                _ => panic!("Unexpected character: {}", c),
-            }
-        }
-        Token::EOF
-    }
-
-    fn lex_number(&mut self) -> Token {
-        let mut num = String::new();
-        let mut is_float = false;
-
-        while let Some(c) = self.current {
-            if c.is_ascii_digit() {
-                num.push(c);
-                self.bump();
-            } else if c == '.' {
-                if is_float {
-                    panic!("Unexpected second '.' in number");
-                }
-                is_float = true;
-                num.push(c);
-                self.bump();
-            } else {
-                break;
-            }
-        }
-
-        if is_float {
-            let val: f64 = num.parse().expect("Invalid float literal");
-            Token::NumberFloat(val)
-        } else {
-            let val: i64 = num.parse().expect("Invalid integer literal");
-            Token::NumberInt(val)
-        }
-    }
-
-    fn lex_identifier(&mut self) -> Token {
-        let mut ident = String::new();
-        while let Some(c) = self.current {
-            if c.is_alphanumeric() || c == '_' {
-                ident.push(c);
-                self.bump();
-            } else {
-                break;
-            }
-        }
-
-        match ident.as_str() {
-            "struct" => Token::Struct,
-            "i32" => Token::I32,
-            "f32" => Token::F32,
-            "return" => Token::Return,
-            "break" => Token::Break,
-            "while" => Token::While,
-            "if" => Token::If,
-            "else" => Token::Else,
-            "for" => Token::For,
-            "void" => Token::Void,
-            _ => Token::Identifier(ident),
-        }
-    }
-}
-
-
-struct Parser<'a> {
-    lexer: Lexer<'a>,
-    lookahead: Token,
-    buffer: VecDeque<Token>,
+pub struct Parser<'a> {
+    tokens: Vec<Token>,
+    file_manager: &'a FileManager,
 }
 
 impl<'a> Parser<'a> {
-    fn new(mut lexer: Lexer<'a>) -> Self {
-        let lookahead = lexer.next_token();
-        Parser {
-            lexer,
-            lookahead,
-            buffer: VecDeque::new(),
+    pub fn new(tokens: Vec<Token>, file_manager: &'a FileManager) -> Self {
+        Self {
+            tokens,
+            file_manager,
         }
     }
 
-    fn bump(&mut self) {
-        if let Some(tok) = self.buffer.pop_front() {
-            self.lookahead = tok;
+    fn peek(&self, pointer: &usize) -> Option<&Token> {
+        self.tokens.get(*pointer)
+    }
+
+    fn advance(&self, pointer: &mut usize) -> Option<&Token> {
+        let token = self.tokens.get(*pointer);
+        if token.is_some() {
+            *pointer += 1;
+        }
+        token
+    }
+
+    fn match_token(&self, pointer: &mut usize, token_type: TokenType) -> CodeResult<bool> {
+        self.is_done_err(pointer)?;
+        if let Some(token) = self.peek(pointer) {
+            if token.token_type == token_type {
+                self.advance(pointer);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn multi_match_token(&self, pointer: &mut usize, token_types: Vec<TokenType>) -> CodeResult<bool> {
+        self.is_done_err(pointer)?;
+        if let Some(token) = self.peek(pointer) {
+            if token_types.contains(&token.token_type) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn match_next_token(&self, pointer: &mut usize, token_type: TokenType) -> CodeResult<bool> {
+        self.is_done_err(pointer)?;
+        if let Some(token) = self.tokens.get(*pointer + 1) {
+            if token.token_type == token_type {
+                self.advance(pointer);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn consume(
+        &self,
+        pointer: &mut usize,
+        expected: TokenType,
+        note: Option<String>,
+    ) -> CodeResult<&Token> {
+        self.is_done_err(pointer)?;
+        if self.match_token(pointer, expected)? {
+            Ok(self.previous(pointer).unwrap())
         } else {
-            self.lookahead = self.lexer.next_token();
+            Err(CodeError::new_unexpected_token_error(
+                self.current(pointer).or(self.previous(pointer)).unwrap(),
+                expected,
+                note,
+            ))
         }
     }
 
-
-    fn peek(&mut self, n: usize) -> &Token {
-        while self.buffer.len() < n {
-            let tok = self.lexer.next_token();
-            self.buffer.push_back(tok);
-        }
-        &self.buffer[n - 1]
+    fn previous(&self, pointer: &usize) -> Option<&Token> {
+        self.tokens.get(*pointer - 1)
     }
 
+    fn current(&self, pointer: &usize) -> Option<&Token> {
+        self.tokens.get(*pointer)
+    }
 
-    fn expect(&mut self, expected: Token) {
-        if self.lookahead == expected {
-            self.bump();
+    fn warning(&self, code_warning: CodeWarning) {
+        print_code_warn(code_warning, self.file_manager)
+    }
+
+    fn codepos_from_space(&self, s: usize, e: &usize, sub_off: usize) -> CodePosition {
+        let start = self.tokens.get(s).unwrap().code_position;
+        let end = self.tokens.get(*e - sub_off).unwrap().code_position;
+        CodePosition {
+            idx_start: start.idx_start,
+            idx_end: end.idx_end,
+            line_start: start.line_start,
+            line_end: end.line_end,
+            line_idx_start: start.line_idx_start,
+            line_idx_end: end.line_idx_end,
+        }
+    }
+
+    pub fn parse(&self, pointer: &mut usize) -> CodeResult<Vec<AST>> {
+        let mut statements = Vec::new();
+
+        while let Some(token) = self.peek(pointer) {
+            match token.token_type {
+                // Parse function definitions
+                TokenType::Define => {
+                    self.advance(pointer);
+                    let func = self.parse_function(pointer)?;
+                    statements.push(func);
+                }
+
+                // // Parse import statements
+                // TokenType::Import => {
+                //     let import_stmt = self.parse_import(pointer)?;
+                //     statements.push(import_stmt);
+                // }
+
+                _ => {
+                    return Err(CodeError::placeholder());
+                }
+            }
+        }
+
+        Ok(statements)
+    }
+
+    // // Parse import statement (assuming a simple import structure)
+    // fn parse_import(&self, pointer: &mut usize) -> CodeResult<AST> {
+    //     // Consume 'import' keyword
+    //     self.consume(pointer, TokenType::Import, None)?;
+//
+    //     // Expect an identifier for the import (e.g., module name)
+    //     let module_name = self.consume(pointer, TokenType::Identifier, None)?;
+//
+    //     // Optionally, handle import paths or other structures here if needed
+    //     Ok(AST::Import(module_name))
+    // }
+
+    pub fn parse_function(&self, pointer: &mut usize) -> CodeResult<AST> {
+        let fmode = if self.match_token(pointer, TokenType::Export)? { FunctionMode::Export }
+        else if self.match_token(pointer, TokenType::Private)? { FunctionMode::Private }
+        else if self.match_token(pointer, TokenType::Extern)? { FunctionMode::Extern }
+        else { FunctionMode::Default };
+
+        if self.multi_match_token(pointer, vec![TokenType::Extern, TokenType::Export, TokenType::Private])? {
+            return Err(CodeError::function_overloaded(self.previous(pointer).unwrap()))
+        }
+
+        let name = self.consume(pointer, TokenType::Identifier, None)?;
+
+        self.consume(pointer, TokenType::LParen, None)?;
+
+        let args = self.parse_arguments(pointer)?;
+
+        self.consume(pointer, TokenType::RParen, None)?;
+
+        self.consume(pointer, TokenType::Colon, None)?;
+        let ret = self.parse_type(pointer)?;
+
+        let body = self.parse_block(pointer)?;
+
+        Ok(AST::FunctionDef {
+            name,
+            fmode,
+            ret,
+            args,
+            body,
+        })
+    }
+
+    fn parse_block(&self, pointer: &mut usize) -> CodeResult<Vec<Box<AST>>> {
+        self.consume(pointer, TokenType::LBrace, None)?;
+
+        let mut statements = Vec::new();
+
+        while let Some(token) = self.peek(pointer) {
+            if token.token_type == TokenType::RBrace {
+                break;
+            }
+
+            let stmt = self.parse_statement(pointer)?;
+            statements.push(Box::new(stmt));
+
+            if !self.match_token(pointer, TokenType::SemiColon)? {
+                break;
+            }
+        }
+
+        if self.match_token(pointer, TokenType::RBrace)? {
+            Ok(statements)
         } else {
-            panic!("Expected {:?}, found {:?}", expected, self.lookahead);
+            match self.endstatement_analyzer(pointer) {
+                EndSAR::Brace(codepos) => {
+                    Err(CodeError::missing_ends_error(codepos.inc(), TokenType::RBrace))
+                }
+                EndSAR::Semicolon(codepos) => {
+                    Err(CodeError::missing_ends_error(codepos.inc(), TokenType::SemiColon))
+                }
+                EndSAR::Nothing => {
+                    Ok(statements)
+                }
+            }
         }
     }
 
-    fn parse(&mut self) -> Vec<AST> {
-        let mut items = Vec::new();
-        while self.lookahead != Token::EOF {
-            items.push(self.parse_function_or_decl());
+    fn parse_function_call(&self, pointer: &mut usize) -> CodeResult<Expression> {
+        let name = self.previous(pointer).unwrap();
+        self.consume(pointer, TokenType::LParen, None)?;
+        let mut arguments = vec![];
+        while let Some(_tok) = self.peek(pointer) {
+            arguments.push(self.parse_expression(pointer)?);
+            if self.match_token(pointer, TokenType::RParen)? {
+                break;
+            }
+            self.consume(pointer, TokenType::Comma, Some("Add a comma".to_string()))?;
         }
-        items
+        Ok(Expression::FunctionCall {name, arguments})
     }
 
-    fn parse_type(&mut self) -> Types {
-        match self.lookahead.clone() {
-            Token::I32 => {
-                self.bump();
-                Types::I32
-            }
-            Token::F32 => {
-                self.bump();
-                Types::F32
-            }
-            Token::Void => {
-                self.bump();
-                Types::F32
-            }
-            Token::Identifier(name) => {
-                self.bump();
-                Types::Struct {name}
-            }
-            _ => panic!("Expected type"),
-        }
-    }
-
-    fn parse_identifier(&mut self) -> String {
-        if let Token::Identifier(name) = &self.lookahead {
-            let id = name.clone();
-            self.bump();
-            id
+    fn parse_return(&self, pointer: &mut usize) -> CodeResult<AST> {
+        self.consume(pointer, TokenType::Return, None)?;
+        if self.multi_match_token(pointer, vec![TokenType::SemiColon, TokenType::RBrace])? {
+            Ok(AST::Return(None))
         } else {
-            panic!("Expected identifier, got {:?}", self.lookahead);
+            Ok(AST::Return(Some(self.parse_expression(pointer)?)))
         }
     }
 
-    fn parse_function_or_decl(&mut self) -> AST {
-        let var_type = self.parse_type();
-        let name = self.parse_identifier();
+    fn endstatement_analyzer(&self, pointer: &usize) -> EndSAR {
+        /*
+        Check if next token is a statement / Expression.
+        If it is, a semicolon should be placed before it.
+        If the file is ending, it should definitely be a brace!
+        TODO: If the token is a global token, it should also be a brace
+        */
+        let r = self.peek(pointer);
+        if r.is_none() {
+            EndSAR::Brace(self.previous(pointer).unwrap().code_position)
+        } else {
+            let tok = &r.unwrap();
+            if STATEMENT_TOKENS.contains(&tok.token_type) {
+                EndSAR::Semicolon(self.previous(pointer).unwrap().code_position)
+            } else {
+                EndSAR::Nothing
+            }
+        }
+    }
 
-        if self.lookahead == Token::LParen {
-            self.bump(); // (
-            let mut params = Vec::new();
-            if self.lookahead != Token::RParen {
-                loop {
-                    let ptype = self.parse_type();
-                    let pname = self.parse_identifier();
-                    params.push((ptype, pname));
-                    if self.lookahead == Token::Comma {
-                        self.bump();
+    fn parse_statement(&self, pointer: &mut usize) -> CodeResult<AST> {
+        let token = self.peek(pointer);
+
+        if let Some(token) = token {
+            match token.token_type {
+                TokenType::Identifier => {
+                    if self.match_next_token(pointer, TokenType::LParen)? {
+                        let a = *pointer;
+                        let expr = self.parse_function_call(pointer)?;
+                        let position = self.codepos_from_space(a, pointer, 1);
+                        Ok(AST::Expression { expr, position })
                     } else {
-                        break;
+                        let a = *pointer;
+                        let res = self.parse_expression(pointer);
+                        let cpos = self.codepos_from_space(a, pointer, 1);
+                        self.warning(CodeWarning::new_unnecessary_code(
+                            cpos,
+                            None,
+                        ));
+                        Ok(AST::Expression { expr: res?, position: cpos })
                     }
                 }
-            }
-
-            self.expect(Token::RParen);
-            if self.lookahead == Token::Semicolon {
-                self.bump();
-                return AST::FunctionDef {
-                    return_type: var_type,
-                    name,
-                    params,
-                    body: None
+                TokenType::NumberInt | TokenType::NumberFloat => {
+                    let a = *pointer;
+                    let res = self.parse_expression(pointer);
+                    let cpos = self.codepos_from_space(a, pointer, 1);
+                    self.warning(CodeWarning::new_unnecessary_code(
+                        cpos,
+                        None,
+                    ));
+                    Ok(AST::Expression { expr: res?, position: cpos })
                 }
-            }
-            self.expect(Token::LBrace);
-
-            let mut body = Vec::new();
-            while self.lookahead != Token::RBrace {
-                let statement = self.parse_statement();
-                println!("{:?}", statement);
-                body.push(statement);
-            }
-            self.expect(Token::RBrace);
-
-            AST::FunctionDef {
-                return_type: var_type,
-                name,
-                params,
-                body: Some(body),
+                TokenType::Return => self.parse_return(pointer),
+                _o => Err(CodeError::new_unexpected_token_error(
+                    token,
+                    TokenType::Statement,
+                    Some("Expected some sort of statement".to_string()),
+                )),
             }
         } else {
-            panic!("Only function definitions are allowed at top-level")
+            Err(CodeError::missing_token_error(
+                self.previous(pointer).unwrap(),
+            ))
         }
     }
 
-    fn parse_statement(&mut self) -> AST {
-        if token_is_type_like(&self.lookahead) && matches!(self.peek(2), Token::Eq | Token::Semicolon) {
-            return self.parse_var_def()
+    fn is_done(&self, pointer: &usize) -> bool {
+        (*pointer - 1) == self.tokens.len()
+    }
+
+    fn is_done_err(&self, pointer: &usize) -> CodeResult<()> {
+        if self.is_done(pointer) {
+            Err(CodeError::missing_token_error(
+                self.previous(pointer).unwrap(),
+            ))
+        } else {
+            Ok(())
         }
-        match &self.lookahead {
-            Token::Identifier(_) => {
-                let expr = self.parse_expr();
-                self.expect(Token::Semicolon);
-                expr.into()
+    }
+
+    fn parse_arguments(&self, pointer: &mut usize) -> CodeResult<Vec<(&Token, Types)>> {
+        let mut arguments = Vec::new();
+
+        while let Some(token) = self.peek(pointer) {
+            if token.token_type == TokenType::RParen {
+                break;
             }
-            Token::Return => {
-                self.bump();
-                let expr = self.parse_expr();
-                self.expect(Token::Semicolon);
-                AST::Return(expr)
+
+            let name = self.consume(pointer, TokenType::Identifier, None)?;
+            self.consume(pointer, TokenType::Colon, None)?;
+            let arg_type = self.parse_type(pointer)?;
+
+            arguments.push((name, arg_type));
+
+            if !self.match_token(pointer, TokenType::Comma)? {
+                break;
             }
-            _ => panic!("Unexpected token in function body: {:?}", self.lookahead),
+        }
+
+        Ok(arguments)
+    }
+
+    fn parse_expression(&self, pointer: &mut usize) -> CodeResult<Expression> {
+        let term = self.parse_term(pointer)?;
+        if self.match_token(pointer, TokenType::As)? {
+            // Ok(AST::CastExpr(
+            //     Box::new(term),
+            //     Box::new(self.parse_type(pointer)?),
+            // ))
+            todo!("Implement CastExpr")
+        } else {
+            Ok(term)
         }
     }
 
-    fn parse_expr(&mut self) -> Expression {
-        let mut left = self.real_parse_primary();
+    fn parse_term(&self, pointer: &mut usize) -> CodeResult<Expression> {
+        let mut node = self.parse_factor(pointer)?;
 
-        let op = <&Token as Into<Option<BinaryOp>>>::into((&self.lookahead).into());
-        if op.is_none() {return left}
-        let op = op.unwrap();
-        self.bump();
-
-        let right = self.parse_expr();
-        left = Expression::Binary {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-        };
-
-        left
-    }
-
-    fn parse_fcall(&mut self, name: String) -> Expression {
-        self.expect(Token::LParen);
-        let mut arguments = vec![];
-        if self.lookahead != Token::RParen {
-            loop {
-                arguments.push(self.parse_expr());
-                if self.lookahead == Token::Comma {
-                    self.bump();
-                } else {
-                    break;
+        while let Some(token) = self.peek(pointer) {
+            match token.token_type {
+                TokenType::Plus | TokenType::Minus => {
+                    let op = self.advance(pointer).unwrap();
+                    let right = self.parse_factor(pointer)?;
+                    node = Expression::BinaryOp { lhs: Box::new(node), op, rhs: Box::new(right) };
                 }
+                _ => break,
             }
         }
-        self.expect(Token::RParen);
-        Expression::FunctionCall {name, arguments}
+        Ok(node)
     }
 
-    fn real_parse_primary(&mut self) -> Expression {
-        let p = self.parse_primary();
-        if self.lookahead == Token::LParen { match p {
-            Expression::Identifier(name) => {
-                self.parse_fcall(name)
+    fn parse_factor(&self, pointer: &mut usize) -> CodeResult<Expression> {
+        let mut node = self.parse_primary(pointer)?;
+
+        while let Some(token) = self.peek(pointer) {
+            match token.token_type {
+                TokenType::Star | TokenType::Slash => {
+                    let op = self.advance(pointer).unwrap();
+                    let right = self.parse_primary(pointer)?;
+                    node = Expression::BinaryOp { lhs: Box::new(node), op, rhs: Box::new(right) };
+                }
+                _ => break,
             }
-            _ => {p} }
         }
-        else {
-            p
+        Ok(node)
+    }
+
+    fn parse_primary(&self, pointer: &mut usize) -> CodeResult<Expression> {
+        if let Some(token) = self.advance(pointer) {
+            match token.token_type {
+                TokenType::NumberInt => Ok(Expression::IntNumber { value: token.content.parse().unwrap(), token }),
+                TokenType::NumberFloat => Ok(Expression::FloatNumber { value: token.content.parse().unwrap(), token }),
+                TokenType::Identifier => {
+                    if self.match_next_token(pointer, TokenType::LParen)? {
+                        self.parse_function_call(pointer)
+                    } else {
+                        Ok(Expression::Identifier(token))
+                    }
+                }
+                TokenType::String => Ok(Expression::String(token)),
+                TokenType::LParen => {
+                    let expr = self.parse_expression(pointer)?;
+                    if self.match_token(pointer, TokenType::RParen)? {
+                        Ok(expr)
+                    } else {
+                        println!("LParen");
+                        Err(CodeError::placeholder())
+                    }
+                }
+                _ => Err(CodeError::new_unexpected_token_error(
+                    self.previous(pointer).unwrap(),
+                    TokenType::Expression,
+                    Some(
+                        "You may add a literal (number), string, variable, or a term here"
+                            .to_string(),
+                    ),
+                )),
+            }
+        } else {
+            Err(CodeError::missing_token_error(
+                self.previous(pointer).unwrap(),
+            ))
         }
     }
 
-    fn parse_primary(&mut self) -> Expression {
-        match &self.lookahead {
-            Token::Identifier(name) => {
-                let id = name.clone();
-                self.bump();
-                Expression::Identifier(id)
-            }
-            Token::NumberInt(int) => {
-                let int = int.clone();
-                self.bump();
-                Expression::IntNumber(int)
-            }
-            Token::NumberFloat(int) => {
-                let int = int.clone();
-                self.bump();
-                Expression::FloatNumber(int)
-            }
-            _ => panic!("Expected primary expression, found {:?}", self.lookahead),
-        }
-    }
-
-    fn parse_var_def(&mut self) -> AST {
-        let var_type = self.parse_type();
-        let name = self.parse_identifier();
-        if self.lookahead == Token::Semicolon {
-            self.expect(Token::Semicolon);
-            return AST::VarDef { var_type, name, value: None }
-        }
-        self.expect(Token::Eq);
-        let value = self.parse_expr();
-        self.expect(Token::Semicolon);
-        AST::VarDef { var_type, name, value: Some(value) }
+    fn parse_type(&self, pointer: &mut usize) -> CodeResult<Types> {
+        let kind = 
+            if self.match_token(pointer, TokenType::i32)? { Ok(TypesKind::I32) }
+            else if self.match_token(pointer, TokenType::void)? { Ok(TypesKind::I32) }
+            else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
+            else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))};
+        
+        Ok(Types::new(kind?, &self.tokens[*pointer]))
     }
 }
 
-pub fn analyze(src: &str) {
-    let mut lexer = Lexer::new(src);
-    let mut tok = Token::Semicolon;
-    while tok != Token::EOF {
-        tok = lexer.next_token();
-        print!("{:?}\n", tok);
+#[derive(Debug, Hash, Copy, Clone)]
+pub enum FunctionMode {
+    Private,
+    Export,
+    Extern,
+    Default,
+}
+
+#[derive(Debug, Hash, Clone)]
+pub enum TypesKind {
+    I32,
+    F32,
+    Void,
+    Struct {name: String},
+    Function {ret: Box<TypesKind>, params: Vec<TypesKind>}
+}
+
+#[derive(Debug, Hash, Clone)]
+struct Types<'a> {
+    kind: TypesKind,
+    token: &'a Token
+}
+
+impl<'a> Types<'a> {
+    pub fn new(kind: TypesKind, token: &'a Token) -> Self {
+        Self {kind, token}
     }
 }
 
-pub fn parse_file_source(source: &str) -> Vec<AST> {
-    let lexer = Lexer::new(source);
-    let mut parser = Parser::new(lexer);
-    parser.parse()
+#[derive(Debug, Hash)]
+pub enum Expression<'a> {
+    IntNumber {
+        value: u64,
+        token: &'a Token,
+    },
+    FloatNumber {
+        value: u64,
+        token: &'a Token,
+    },
+    Identifier(&'a Token),
+    String(&'a Token),
+    Type { typ: Types<'a>, token: &'a Token },
+    // LHS, Opcode, RHS
+    BinaryOp {lhs: Box<Expression<'a>>, op: &'a Token, rhs: Box<Expression<'a>>},
+    // Expr, Type
+    CastExpr { expr: Box<Expression<'a>>, typ: Types<'a> },
+    FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
+}
+
+#[derive(Debug, Hash)]
+pub enum AST<'a> {
+    Expression { expr: Expression<'a >, position: CodePosition },
+    FunctionDef {
+        name: & 'a Token,
+        fmode: FunctionMode,
+        ret: Types<'a>,
+        args: Vec<(& 'a Token, Types<'a>)>,
+        body: Vec<Box<AST<'a>>>,
+    },
+    VariableSet { name: & 'a Token, value: Expression<'a>, typ: Types<'a> },
+    Return(Option<Expression<'a>>),
 }
