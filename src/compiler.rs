@@ -132,9 +132,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn visit_bin_op<'a>(&'a self, lhs: Box<(dyn BasicValue<'a> + 'a)>, rhs: Box<(dyn BasicValue<'a> + 'a)>, op: BinaryOp, typ: &TypesKind) -> CodeResult<Box<dyn BasicValue + 'a>> {
-        todo!("Make bin-ops work");
-        /*
-        match typ {
+        Ok(match typ {
             TypesKind::I32 => {
                 match op {
                     BinaryOp::Eq => Box::new(self.builder.build_int_compare(IntPredicate::EQ, basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
@@ -204,7 +202,7 @@ impl<'ctx> Compiler<'ctx> {
             // Types::Struct { .. } => {}
             // Types::Function { .. } => {}
             _ => {panic!("Can not perform binary operations on this type!")}
-        }*/
+        })
     }
     
     fn null(&self) -> IntValue<'ctx> {
@@ -220,11 +218,11 @@ impl<'ctx> Compiler<'ctx> {
                 let real_type = self.convert_type_normal(&def.0).map_err(|e| {CodeError::void_type(name)})?;
                 (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, &name.content).expect("Failed to load")), def.0.clone())
             }
-            ExpressionKind::IntNumber { value, token } => {
+            ExpressionKind::IntNumber { value, .. } => {
                 let (hint, sign, vt) = hinted_int(type_hint, self.context);
                 (Box::new(hint.const_int(value, sign).as_basic_value_enum()), vt)
             }
-            ExpressionKind::FloatNumber { value, token } => {
+            ExpressionKind::FloatNumber { value, .. } => {
                 let(hint, vt) = hinted_float(type_hint, self.context);
                 (Box::new(hint.const_float(value).as_basic_value_enum()), vt)
             }
