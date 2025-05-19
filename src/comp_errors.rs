@@ -51,7 +51,8 @@ pub enum CodeErrorType {
     SymbolNotFound,
     VoidReturn,
     InvalidVarDef,
-    NonVoidReturn
+    NonVoidReturn,
+    Unable2Cast,
 }
 
 #[derive(Debug)]
@@ -190,6 +191,17 @@ impl CodeError {
             "Wrong amount of arguments".to_string(),
             Some("help: adjust the argument count you are passing".to_string()),
             format!("Expected {requires}, but got {got}"),
+            vec![]
+        )
+    }
+
+    pub fn invalid_cast(token: &Token, new_typ: &TypesKind, expr_typ: &TypesKind) -> Self {
+        Self::new(
+            token.code_position,
+            CodeErrorType::Unable2Cast,
+            "Unable to cast incompatible types".to_string(),
+            Some(format!("Cast as type `{new_typ}`")),
+            format!("Can not cast an expression of type `{expr_typ}` to `{new_typ}`"),
             vec![]
         )
     }

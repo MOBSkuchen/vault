@@ -108,6 +108,10 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::Function { ret, params } => {
                 Ok(Box::new(self.convert_type_function(&*ret.to_owned(), params.iter().map(|x| {x.to_owned()}).collect())?.ptr_type(AddressSpace::default())))
             },
+            TypesKind::Ptr(ptr) => {
+                Ok(Box::new(self.convert_type_normal(ptr)?.ptr_type(AddressSpace::default()).as_basic_type_enum()))
+            }
+            TypesKind::Pointer => Ok(Box::new(self.context.ptr_type(AddressSpace::default()).as_basic_type_enum()))
         }
     }
 
@@ -128,6 +132,10 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::Function { ret,params } => {
                 Ok(*Box::new(self.convert_type_function(&*ret.to_owned(), params.iter().map(|x| { x.to_owned() }).collect())?.ptr_type(AddressSpace::default()).fn_type(&param_types, false)))
             },
+            TypesKind::Ptr(ptr) => {
+                Ok(*Box::new(self.convert_type_normal(ptr)?.ptr_type(AddressSpace::default()).fn_type(&param_types, false)))
+            },
+            TypesKind::Pointer => Ok(*Box::new(self.context.ptr_type(AddressSpace::default()).fn_type(&param_types, false)))
         }
     }
 
@@ -269,7 +277,85 @@ impl<'ctx> Compiler<'ctx> {
             },
             ExpressionKind::String(_) => {todo!("Implement")}
             ExpressionKind::Type { .. } => {todo!("Implement")}
-            ExpressionKind::CastExpr { .. } => {todo!("Implement")}
+            ExpressionKind::CastExpr { expr, typ: new_type } => {
+                let (value, old_type) = self.visit_expr(function, global_scope, *expr, None, true)?;
+                let mut value = value.as_basic_value_enum();
+                let result = match old_type {
+                    TypesKind::I32 => {
+                        match &new_type.kind {
+                            TypesKind::I32 => return Ok((Box::new(value), old_type)),
+                            TypesKind::F32 => self.builder
+                                .build_signed_int_to_float(
+                                    value.into_int_value(),
+                                    self.context.f32_type(),
+                                    "",
+                                )
+                                .map(|v| v.as_basic_value_enum())
+                                .ok(),
+                            TypesKind::Void => None,
+                            TypesKind::Ptr(ptr_type) => {
+                                let target_type = self.convert_type_normal(&ptr_type).map_err(|e1| {CodeError::void_type(new_type.token)})?.ptr_type(AddressSpace::default());
+                                self.builder
+                                    .build_int_to_ptr(value.into_int_value(), target_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                            TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
+                            TypesKind::Pointer => {
+                                let target_type = self.context.ptr_type(AddressSpace::default());
+                                self.builder
+                                    .build_int_to_ptr(value.into_int_value(), target_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                        }
+                    }
+                    TypesKind::F32 => {
+                        match new_type.kind {
+                            TypesKind::F32 => return Ok((Box::new(value), old_type)),
+                            TypesKind::I32 => self.builder
+                                .build_float_to_signed_int(
+                                    value.into_float_value(),
+                                    self.context.i32_type(),
+                                    "",
+                                )
+                                .map(|v| v.as_basic_value_enum())
+                                .ok(),
+                            _ => None,
+                        }
+                    }
+                    TypesKind::Void => None,
+                    TypesKind::Ptr(_) | TypesKind::Pointer => {
+                        match &new_type.kind {
+                            TypesKind::I32 => self.builder
+                                .build_ptr_to_int(
+                                    value.into_pointer_value(),
+                                    self.context.i32_type(),
+                                    "",
+                                )
+                                .map(|v| v.as_basic_value_enum())
+                                .ok(),
+                            TypesKind::Ptr(ptr_type) => {
+                                let target_type = self.convert_type_normal(&ptr_type).map_err(|e1| {CodeError::void_type(new_type.token)})?.ptr_type(AddressSpace::default());
+                                self.builder
+                                    .build_bit_cast(value.into_int_value(), target_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                            TypesKind::Pointer => {
+                                let target_type = self.context.ptr_type(AddressSpace::default());
+                                self.builder
+                                    .build_bit_cast(value.into_int_value(), target_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                            _ => None,
+                        }
+                    }
+                    TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
+                };
+                (Box::new(result.ok_or_else(|| {CodeError::invalid_cast(new_type.token, &new_type.kind, &old_type)})?), new_type.kind)
+            }
         })
     }
 
@@ -312,7 +398,7 @@ impl<'ctx> Compiler<'ctx> {
                     let cpos = &expr.code_position.clone();
                     let (n_value, typ) = self.visit_expr(function, global_scope, expr, Some(function.ret), true)?;
                     if typ != *function.ret {
-                        return Err(CodeError::type_mismatch(cpos, &typ, function.ret, vec![format!("This is because the function `{}` has the return-type {}", function.name, function.ret)]))
+                        return Err(CodeError::type_mismatch(cpos, &typ, function.ret, vec![format!("This is because the function `{}` has the return-type `{}`", function.name, function.ret)]))
                     }
                     self.builder.build_return(Some(n_value.deref())).expect("Failed to return");
                 } else {
@@ -369,3 +455,5 @@ impl<'ctx> Compiler<'ctx> {
         Ok(module)
     }
 }
+
+// TODO: FIX PROBLEM WITH Reassignment and casting!!!!!

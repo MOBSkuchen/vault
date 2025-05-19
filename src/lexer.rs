@@ -54,6 +54,7 @@ pub enum TokenType {
     While,
     Let,
     Or,
+    Ptr,
 
     // Virtual types
     Expression,
@@ -95,7 +96,7 @@ impl TokenType {
             TokenType::LesserEquals => "<=",
             TokenType::RBrace => "}",
             TokenType::LBrace => "{",
-            TokenType::As => "->",
+            TokenType::As => "=>",
             TokenType::Private => "private",
             TokenType::Return => "return",
             TokenType::Expression => "Expression",
@@ -110,6 +111,7 @@ impl TokenType {
             TokenType::F32 => "f32",
             TokenType::Void => "void",
             TokenType::Or => "or",
+            TokenType::Ptr => "ptr"
         })
             .to_string()
     }
@@ -381,10 +383,6 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
             }
             '-' => {
                 scanner.pop();
-                if let Some('>') = scanner.peek() {
-                    scanner.pop();
-                    return Ok(scanner.this_as_token(TokenType::As));
-                }
                 return Ok(scanner.this_as_token(TokenType::Minus));
             }
             '>' => {
@@ -416,6 +414,9 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 if let Some('=') = scanner.peek() {
                     scanner.pop();
                     return Ok(scanner.this_as_token(TokenType::DoubleEquals));
+                } else if let Some('>') = scanner.peek() {
+                    scanner.pop();
+                    return Ok(scanner.this_as_token(TokenType::As));
                 }
                 return Ok(scanner.this_as_token(TokenType::Equals));
             }
@@ -445,6 +446,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "i32" => TokenType::I32,
                     "f32" => TokenType::F32,
                     "void" => TokenType::Void,
+                    "ptr" => TokenType::Ptr,
                     _ => TokenType::Identifier,
                 };
                 return Ok(Some(Token {

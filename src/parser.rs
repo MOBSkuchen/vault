@@ -1,5 +1,5 @@
 use std::fmt;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use inkwell::module::Linkage;
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
@@ -374,7 +374,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&self, pointer: &mut usize) -> CodeResult<Expression> {
-        let a = pointer.clone();
+        let a = *pointer;
         let term = self.parse_term(pointer)?;
         if self.match_token(pointer, TokenType::As)? {
             let cpos = self.codepos_from_space(a, pointer, 1);
@@ -392,6 +392,23 @@ impl<'a> Parser<'a> {
                 TokenType::Plus | TokenType::Minus => {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_factor(pointer)?;
+                    let cpos = node.code_position.merge(right.code_position);
+                    node = (ExpressionKind::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) }).into_expression(cpos);
+                }
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
+    fn parse_fact(&self, pointer: &mut usize) -> CodeResult<Expression> {
+        let mut node = self.parse_factor(pointer)?;
+
+        while let Some(token) = self.peek(pointer) {
+            match token.token_type {
+                TokenType::Star | TokenType::Slash => {
+                    let op = self.advance(pointer).unwrap();
+                    let right = self.parse_primary(pointer)?;
                     let cpos = node.code_position.merge(right.code_position);
                     node = (ExpressionKind::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) }).into_expression(cpos);
                 }
@@ -457,14 +474,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&self, pointer: &mut usize) -> CodeResult<Types> {
-        let kind =
-            if self.match_token(pointer, TokenType::I32)? { Ok(TypesKind::I32) }
+        let mut kind =
+            (if self.match_token(pointer, TokenType::I32)? { Ok(TypesKind::I32) }
             else if self.match_token(pointer, TokenType::F32)? { Ok(TypesKind::F32) }
             else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
+            else if self.match_token(pointer, TokenType::Ptr)? { Ok(TypesKind::Pointer) }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
-            else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))};
+            else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))})?;
 
-        Ok(Types::new(kind?, &self.tokens[*pointer]))
+        loop {
+            if self.match_token(pointer, TokenType::Star)? {
+                kind = TypesKind::Ptr(Box::new(kind))
+            } else {
+                break
+            }
+        }
+
+        Ok(Types::new(kind, &self.tokens[*pointer]))
     }
 }
 
@@ -531,19 +557,23 @@ pub enum TypesKind {
     I32,
     F32,
     Void,
+    Ptr(Box<TypesKind>),
+    Pointer,
     Struct {name: String},
     Function {ret: Box<TypesKind>, params: Vec<TypesKind>}
 }
 
 impl Display for TypesKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            TypesKind::I32 => "i32",
-            TypesKind::F32 => "f32",
-            TypesKind::Void => "void",
-            TypesKind::Struct { name } => name.as_str(),
-            TypesKind::Function { .. } => "function"
-        })
+        match self {
+            TypesKind::I32 => write!(f, "i32"),
+            TypesKind::F32 => write!(f, "f32"),
+            TypesKind::Void => write!(f, "void"),
+            TypesKind::Struct { name } => write!(f, "{}", name),
+            TypesKind::Function { .. } => write!(f, "function"),
+            TypesKind::Ptr(ptr) => write!(f, "{}*", ptr),
+            TypesKind::Pointer => write!(f, "ptr"),
+        }
     }
 }
 
