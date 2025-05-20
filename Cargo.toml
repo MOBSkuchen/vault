@@ -1,0 +1,21 @@
+[package]
+name = "cmm"
+description = "EZ low level programming language"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+inkwell = {version = "0.6.0", features = ["llvm18-1"] }
+rand = "0.9.1"
+annotate-snippets = "0.11.5"
+anstream = "0.6.18"
+colorize-rs = "0.1.2"
+clap = "4.5.38"
+clap_builder = "4.5.38"
+
+[profile.release]
+lto = true
+opt-level = "z"
+# panic = "abort"
+codegen-units = 1
+strip = true
