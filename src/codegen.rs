@@ -4,7 +4,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
 use rand::{rng, Rng};
 use rand::distr::Alphanumeric;
-
+use crate::OptLevel;
 
 pub struct Codegen {
     target_triple: TargetTriple,
@@ -41,10 +41,16 @@ impl Codegen {
         target_machine
     }
 
-    pub fn optimize(&self, module: &Module) {
+    pub fn optimize(&self, module: &Module, opt_level: &OptLevel) {
         let pb = PassBuilderOptions::create();
         // pb.set_debug_logging(true);
-        module.run_passes("default<O3>", &self.create_target_machine(), pb).expect("Failed to optimize module!")
+        let pass = match opt_level {
+            OptLevel::Null => "default<O0>",
+            OptLevel::One => "default<O1>",
+            OptLevel::Two => "default<O2>",
+            OptLevel::Full => "default<O3>"
+        };
+        module.run_passes(pass, &self.create_target_machine(), pb).expect("Failed to optimize module!")
     }
 
     fn gen_dest_path() -> String {
@@ -55,17 +61,18 @@ impl Codegen {
             .collect()
     }
 
-    pub fn gen_obj(&self, module: &Module, path: Option<String>) -> String {
-        let mut path = path.unwrap_or(Self::gen_dest_path());
-        path += ".o";
+    pub fn gen_obj(&self, module: &Module, path: String) -> String {
         self.create_target_machine().write_to_file(module, FileType::Object, (&path).as_ref()).expect("TODO: panic message");
         path
     }
 
-    pub fn gen_asm(&self, module: &Module, path: Option<String>) -> String {
-        let mut path = path.unwrap_or(Self::gen_dest_path());
-        path += ".asm";
+    pub fn gen_asm(&self, module: &Module, path: String) -> String {
         self.create_target_machine().write_to_file(module, FileType::Assembly, (&path).as_ref()).expect("TODO: panic message");
+        path
+    }
+
+    pub fn gen_ir(&self, module: &Module, path: String) -> String {
+        module.print_to_file(&path).expect("Failed to write module to file");
         path
     }
 }
