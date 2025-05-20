@@ -438,6 +438,16 @@ impl<'a> Parser<'a> {
     fn parse_primary(&self, pointer: &mut usize) -> CodeResult<Expression> {
         if let Some(token) = self.advance(pointer) {
             match token.token_type {
+                TokenType::Ref => {
+                    Ok(Expression {expression: ExpressionKind::Reference { 
+                        var: self.consume(pointer, TokenType::Identifier, Some("`&` is a ref-token, which must be followed by a variable to reference".to_string()))? }
+                        , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
+                },
+                TokenType::Star => {
+                    Ok(Expression {expression: ExpressionKind::Dereference {
+                        var: self.consume(pointer, TokenType::Identifier, Some("`*` is a deref-token, which must be followed by a variable to a pointer".to_string()))? }
+                        , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
+                }
                 TokenType::NumberInt => Ok(Expression { expression: ExpressionKind::IntNumber { value: token.content.parse().unwrap(), token }, code_position: token.code_position }),
                 TokenType::NumberFloat => Ok(Expression { expression: ExpressionKind::FloatNumber { value: token.content.parse().unwrap(), token }, code_position: token.code_position }),
                 TokenType::Identifier => {
@@ -605,6 +615,8 @@ pub enum ExpressionKind<'a> {
     BinaryOp { lhs: Box<Expression<'a>>, op: (&'a Token, BinaryOp), rhs: Box<Expression<'a>> },
     CastExpr { expr: Box<Expression<'a>>, typ: Types<'a> },
     FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
+    Reference { var: &'a Token },
+    Dereference { var: &'a Token }
 }
 
 impl<'a> ExpressionKind<'a> {

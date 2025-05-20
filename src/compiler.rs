@@ -279,7 +279,7 @@ impl<'ctx> Compiler<'ctx> {
             ExpressionKind::Type { .. } => {todo!("Implement")}
             ExpressionKind::CastExpr { expr, typ: new_type } => {
                 let (value, old_type) = self.visit_expr(function, global_scope, *expr, None, true)?;
-                let mut value = value.as_basic_value_enum();
+                let value = value.as_basic_value_enum();
                 let result = match old_type {
                     TypesKind::I32 => {
                         match &new_type.kind {
@@ -336,16 +336,16 @@ impl<'ctx> Compiler<'ctx> {
                                 .map(|v| v.as_basic_value_enum())
                                 .ok(),
                             TypesKind::Ptr(ptr_type) => {
-                                let target_type = self.convert_type_normal(&ptr_type).map_err(|e1| {CodeError::void_type(new_type.token)})?.ptr_type(AddressSpace::default());
+                                let target_type = self.convert_type_normal(ptr_type).map_err(|_| {CodeError::void_type(new_type.token)})?.ptr_type(AddressSpace::default());
                                 self.builder
-                                    .build_bit_cast(value.into_int_value(), target_type, "")
+                                    .build_pointer_cast(value.into_pointer_value(), target_type, "")
                                     .map(|v| v.as_basic_value_enum())
                                     .ok()
                             }
                             TypesKind::Pointer => {
                                 let target_type = self.context.ptr_type(AddressSpace::default());
                                 self.builder
-                                    .build_bit_cast(value.into_int_value(), target_type, "")
+                                    .build_pointer_cast(value.into_pointer_value(), target_type, "")
                                     .map(|v| v.as_basic_value_enum())
                                     .ok()
                             }
@@ -355,6 +355,32 @@ impl<'ctx> Compiler<'ctx> {
                     TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
                 };
                 (Box::new(result.ok_or_else(|| {CodeError::invalid_cast(new_type.token, &new_type.kind, &old_type)})?), new_type.kind)
+            }
+            ExpressionKind::Reference { var } => {
+                let def = check_ls_gs_defs(&var.content, &function.function_scope, global_scope).ok_or_else(|| {
+                    CodeError::symbol_not_found(var)
+                })?;
+                (Box::new(def.1.as_basic_value_enum()), TypesKind::Ptr(Box::new(def.0.clone())))
+            }
+            ExpressionKind::Dereference { var } => {
+                let def = check_ls_gs_defs(&var.content, &function.function_scope, global_scope).ok_or_else(|| {
+                    CodeError::symbol_not_found(var)
+                })?;
+                
+                let deref_type = match &def.0 {
+                    TypesKind::Ptr(ptr_t) => {ptr_t},
+                    TypesKind::Pointer => &{ Box::new(TypesKind::Void) },
+                    _ => {todo!("Add error here; not a pointer")}
+                };
+
+                let ptr_t = self.convert_type_normal(&def.0).map_err(|e| {CodeError::void_type(var)})?;
+                let real_deref_type = self.convert_type_normal(deref_type).map_err(|e| {CodeError::void_type(var)})?;
+                
+                let ptr = self.builder.build_load(ptr_t.as_basic_type_enum(), def.1, "")
+                    .expect("Load (deref) failed").as_basic_value_enum().into_pointer_value();
+                let value = self.builder.build_load(real_deref_type.as_basic_type_enum(), ptr, "")
+                    .expect("Load (deref) failed").as_basic_value_enum();
+                (Box::new(value), *deref_type.clone())
             }
         })
     }

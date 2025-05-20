@@ -86,7 +86,7 @@ impl TokenType {
             TokenType::Greater => ">",
             TokenType::Lesser => "<",
             TokenType::Pipe => "|",
-            TokenType::And => "&",
+            TokenType::And => "&&",
             TokenType::Ref => "&",
             TokenType::Exclamation => "!",
             TokenType::Equals => "=",
@@ -377,9 +377,9 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 scanner.pop();
                 if let Some('&') = scanner.peek() {
                     scanner.pop();
-                    return Ok(scanner.this_as_token(TokenType::Ref));
+                    return Ok(scanner.this_as_token(TokenType::And));
                 }
-                return Ok(scanner.this_as_token(TokenType::And));
+                return Ok(scanner.this_as_token(TokenType::Ref));
             }
             '-' => {
                 scanner.pop();
