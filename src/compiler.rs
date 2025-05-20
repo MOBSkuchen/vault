@@ -21,13 +21,23 @@ fn resolve_prim_res<'a>(result: Result<FunctionType<'a>, PrimitiveErrors>, tok: 
     result.map_err(|_| {CodeError::void_type(tok)})
 }
 
-pub fn hinted_int<'a>(hint: Option<&TypesKind>, ctx: &'a Context) -> (IntType<'a>, bool, TypesKind) {
+fn is_type_signed(typ: &TypesKind) -> bool {
+    match typ {
+        TypesKind::U32 | TypesKind::U64 | TypesKind::U8 => true,
+        _ => false
+    }
+}
+
+fn hinted_int<'a>(hint: Option<&TypesKind>, ctx: &'a Context) -> (IntType<'a>, TypesKind) {
     match hint {
         Some(h) => {
             match h {
-                _ => (ctx.i32_type(), true, TypesKind::I32),
+                TypesKind::I64 | TypesKind::U64 => (ctx.i64_type(), h.to_owned()),
+                TypesKind::U8 => (ctx.i8_type(), h.to_owned()),
+                TypesKind::U32 => (ctx.i32_type(), h.to_owned()),
+                _ => (ctx.i32_type(), TypesKind::I32),
             }
-        } None => (ctx.i32_type(), true, TypesKind::I32)
+        } None => (ctx.i32_type(), TypesKind::I32)
     }
 }
 
@@ -35,6 +45,7 @@ pub fn hinted_float<'a>(hint: Option<&TypesKind>, ctx: &'a Context) -> (FloatTyp
     match hint {
         Some(h) => {
             match h {
+                TypesKind::F64 => (ctx.f64_type(), TypesKind::F64),
                 _ => (ctx.f32_type(), TypesKind::F32),
             }
         } None => (ctx.f32_type(), TypesKind::F32)
@@ -229,8 +240,8 @@ impl<'ctx> Compiler<'ctx> {
                 (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, &name.content).expect("Failed to load")), def.0.clone())
             }
             ExpressionKind::IntNumber { value, .. } => {
-                let (hint, sign, vt) = hinted_int(type_hint, self.context);
-                (Box::new(hint.const_int(value, sign).as_basic_value_enum()), vt)
+                let (hint, vt) = hinted_int(type_hint, self.context);
+                (Box::new(hint.const_int(value, is_type_signed(&vt)).as_basic_value_enum()), vt)
             }
             ExpressionKind::FloatNumber { value, .. } => {
                 let(hint, vt) = hinted_float(type_hint, self.context);
