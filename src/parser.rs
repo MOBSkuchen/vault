@@ -309,6 +309,16 @@ impl<'a> Parser<'a> {
                     ));
                     Ok(AST::Expression { expr: res? })
                 }
+                TokenType::String => {
+                    let a = *pointer;
+                    let res = self.parse_expression(pointer);
+                    let cpos = self.codepos_from_space(a, pointer, 1);
+                    self.warning(CodeWarning::new_unnecessary_code(
+                        cpos,
+                        None,
+                    ));
+                    Ok(AST::Expression { expr: res? })
+                }
                 TokenType::Let => {
                     *pointer += 1;
                     let name = self.consume(pointer, TokenType::Identifier, None)?;
@@ -401,23 +411,6 @@ impl<'a> Parser<'a> {
         Ok(node)
     }
 
-    fn parse_fact(&self, pointer: &mut usize) -> CodeResult<Expression> {
-        let mut node = self.parse_factor(pointer)?;
-
-        while let Some(token) = self.peek(pointer) {
-            match token.token_type {
-                TokenType::Star | TokenType::Slash => {
-                    let op = self.advance(pointer).unwrap();
-                    let right = self.parse_primary(pointer)?;
-                    let cpos = node.code_position.merge(right.code_position);
-                    node = (ExpressionKind::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) }).into_expression(cpos);
-                }
-                _ => break,
-            }
-        }
-        Ok(node)
-    }
-
     fn parse_factor(&self, pointer: &mut usize) -> CodeResult<Expression> {
         let mut node = self.parse_primary(pointer)?;
 
@@ -487,6 +480,11 @@ impl<'a> Parser<'a> {
         let mut kind =
             (if self.match_token(pointer, TokenType::I32)? { Ok(TypesKind::I32) }
             else if self.match_token(pointer, TokenType::F32)? { Ok(TypesKind::F32) }
+            else if self.match_token(pointer, TokenType::F64)? { Ok(TypesKind::F64) }
+            else if self.match_token(pointer, TokenType::I64)? { Ok(TypesKind::I64) }
+            else if self.match_token(pointer, TokenType::U8)? { Ok(TypesKind::U8) }
+            else if self.match_token(pointer, TokenType::U32)? { Ok(TypesKind::U32) }
+            else if self.match_token(pointer, TokenType::U64)? { Ok(TypesKind::U64) }
             else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
             else if self.match_token(pointer, TokenType::Ptr)? { Ok(TypesKind::Pointer) }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
@@ -566,6 +564,11 @@ impl Into<Linkage> for FunctionMode {
 pub enum TypesKind {
     I32,
     F32,
+    U32,
+    I64,
+    F64,
+    U64,
+    U8,
     Void,
     Ptr(Box<TypesKind>),
     Pointer,
@@ -578,6 +581,11 @@ impl Display for TypesKind {
         match self {
             TypesKind::I32 => write!(f, "i32"),
             TypesKind::F32 => write!(f, "f32"),
+            TypesKind::F64 => write!(f, "f64"),
+            TypesKind::I64 => write!(f, "i64"),
+            TypesKind::U32 => write!(f, "u32"),
+            TypesKind::U64 => write!(f, "u64"),
+            TypesKind::U8 => write!(f, "u8"),
             TypesKind::Void => write!(f, "void"),
             TypesKind::Struct { name } => write!(f, "{}", name),
             TypesKind::Function { .. } => write!(f, "function"),

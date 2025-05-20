@@ -18,8 +18,13 @@ pub enum TokenType {
     NumberFloat,
 
     I32,
+    I64,
     F32,
+    F64,
     Void,
+    U8,
+    U32,
+    U64,
 
     LParen,
     RParen,
@@ -111,7 +116,12 @@ impl TokenType {
             TokenType::F32 => "f32",
             TokenType::Void => "void",
             TokenType::Or => "or",
-            TokenType::Ptr => "ptr"
+            TokenType::Ptr => "ptr",
+            TokenType::I64 => "i64",
+            TokenType::F64 => "f64",
+            TokenType::U8 => "u8",
+            TokenType::U32 => "u32",
+            TokenType::U64 => "u64",
         })
             .to_string()
     }
@@ -445,6 +455,11 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "return" => TokenType::Return,
                     "i32" => TokenType::I32,
                     "f32" => TokenType::F32,
+                    "f64" => TokenType::F64,
+                    "i64" => TokenType::I64,
+                    "u32" => TokenType::U32,
+                    "u64" => TokenType::U64,
+                    "u8" => TokenType::U8,
                     "void" => TokenType::Void,
                     "ptr" => TokenType::Ptr,
                     _ => TokenType::Identifier,
@@ -517,7 +532,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                                 idx_end: start_pos,
                                 line_start: scanner.line,
                                 line_end: scanner.line,
-                                line_idx_start: scanner.line_idx - string.len(),
+                                line_idx_start: scanner.line_idx - string.len() - 2,
                                 line_idx_end: scanner.line_idx,
                             },
                         }));

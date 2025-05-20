@@ -101,7 +101,7 @@ impl<'ctx> Compiler<'ctx> {
 
     fn convert_type_normal<'a>(&'a self, typ: &TypesKind) -> PrimRes<Box<dyn BasicType + 'a>> {
         match typ {
-            TypesKind::I32 => Ok(Box::new(self.context.i32_type())),
+            TypesKind::I32 | TypesKind::U32 => Ok(Box::new(self.context.i32_type())),
             TypesKind::F32 => Ok(Box::new(self.context.f32_type())),
             TypesKind::Void => Err(PrimitiveErrors::TypeVoidUnallowed),
             TypesKind::Struct { .. } => todo!("Add structs"),
@@ -111,7 +111,10 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::Ptr(ptr) => {
                 Ok(Box::new(self.convert_type_normal(ptr)?.ptr_type(AddressSpace::default()).as_basic_type_enum()))
             }
-            TypesKind::Pointer => Ok(Box::new(self.context.ptr_type(AddressSpace::default()).as_basic_type_enum()))
+            TypesKind::Pointer => Ok(Box::new(self.context.ptr_type(AddressSpace::default()).as_basic_type_enum())),
+            TypesKind::I64 | TypesKind::U64 => Ok(Box::new(self.context.i32_type())),
+            TypesKind::F64  => Ok(Box::new(self.context.f64_type())),
+            TypesKind::U8 => Ok(Box::new(self.context.i8_type())),
         }
     }
 
@@ -125,7 +128,7 @@ impl<'ctx> Compiler<'ctx> {
             .collect::<Result<Vec<_>, _>>()?;
 
         match ret_type {
-            TypesKind::I32 => Ok(self.context.i32_type().fn_type(&param_types, false)),
+            TypesKind::I32 | TypesKind::U32 => Ok(self.context.i32_type().fn_type(&param_types, false)),
             TypesKind::F32 => Ok(self.context.f32_type().fn_type(&param_types, false)),
             TypesKind::Void => Ok(self.context.void_type().fn_type(&param_types, false)),
             TypesKind::Struct { .. } => todo!("Add structs"),
@@ -135,7 +138,10 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::Ptr(ptr) => {
                 Ok(*Box::new(self.convert_type_normal(ptr)?.ptr_type(AddressSpace::default()).fn_type(&param_types, false)))
             },
-            TypesKind::Pointer => Ok(*Box::new(self.context.ptr_type(AddressSpace::default()).fn_type(&param_types, false)))
+            TypesKind::Pointer => Ok(*Box::new(self.context.ptr_type(AddressSpace::default()).fn_type(&param_types, false))),
+            TypesKind::I64 | TypesKind::U64 => Ok(self.context.i64_type().fn_type(&param_types, false)),
+            TypesKind::F64 => Ok(self.context.f64_type().fn_type(&param_types, false)),
+            TypesKind::U8 => Ok(self.context.i8_type().fn_type(&param_types, false)),
         }
     }
 
@@ -275,7 +281,13 @@ impl<'ctx> Compiler<'ctx> {
                     _ => Err(CodeError::symbol_not_a_function(name))?
                 }
             },
-            ExpressionKind::String(_) => {todo!("Implement")}
+            ExpressionKind::String(string) => {
+                let global = self.builder.build_global_string_ptr(&string.content, "").expect("Failed to create global str ptr").as_pointer_value();
+                // let ptr = self.builder.build_gep(global);
+                // let s_array = self.context.const_string(string.content.as_bytes(), true);
+                // let ptr = unsafe { PointerValue::new(s_array.as_value_ref()) };
+                (Box::new(global.as_basic_value_enum()), TypesKind::Ptr(Box::new(TypesKind::U8)))
+            }
             ExpressionKind::Type { .. } => {todo!("Implement")}
             ExpressionKind::CastExpr { expr, typ: new_type } => {
                 let (value, old_type) = self.visit_expr(function, global_scope, *expr, None, true)?;
@@ -308,6 +320,7 @@ impl<'ctx> Compiler<'ctx> {
                                     .map(|v| v.as_basic_value_enum())
                                     .ok()
                             }
+                            _ => todo!("Implement more types")
                         }
                     }
                     TypesKind::F32 => {
@@ -353,6 +366,7 @@ impl<'ctx> Compiler<'ctx> {
                         }
                     }
                     TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
+                    _ => todo!("Add more types")
                 };
                 (Box::new(result.ok_or_else(|| {CodeError::invalid_cast(new_type.token, &new_type.kind, &old_type)})?), new_type.kind)
             }

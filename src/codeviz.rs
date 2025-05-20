@@ -46,7 +46,7 @@ pub fn print_code_warn(code_warn: CodeWarning, file_manager: &FileManager) {
     let id_fmt = format!("{:#04x}", code_warn.code_warn_type as usize);
     let msg = Level::Warning
         .title(code_warn.title.as_str())
-        .id(&*id_fmt)
+        .id(&id_fmt)
         .snippet(snip)
         .footers(footers);
 
