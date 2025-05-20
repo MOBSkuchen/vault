@@ -283,92 +283,122 @@ impl<'ctx> Compiler<'ctx> {
             },
             ExpressionKind::String(string) => {
                 let global = self.builder.build_global_string_ptr(&string.content, "").expect("Failed to create global str ptr").as_pointer_value();
-                // let ptr = self.builder.build_gep(global);
-                // let s_array = self.context.const_string(string.content.as_bytes(), true);
-                // let ptr = unsafe { PointerValue::new(s_array.as_value_ref()) };
                 (Box::new(global.as_basic_value_enum()), TypesKind::Ptr(Box::new(TypesKind::U8)))
             }
             ExpressionKind::Type { .. } => {todo!("Implement")}
             ExpressionKind::CastExpr { expr, typ: new_type } => {
                 let (value, old_type) = self.visit_expr(function, global_scope, *expr, None, true)?;
                 let value = value.as_basic_value_enum();
+                let real_new_typ = self.convert_type_normal(&new_type.kind)
+                    .map_err(|_| CodeError::void_type(new_type.token))?
+                    .as_basic_type_enum();
+
                 let result = match old_type {
-                    TypesKind::I32 => {
+                    TypesKind::I32 | TypesKind::U32 | TypesKind::U8 | TypesKind::I64 | TypesKind::U64 => {
+                        let int_val = value.into_int_value();
                         match &new_type.kind {
-                            TypesKind::I32 => return Ok((Box::new(value), old_type)),
-                            TypesKind::F32 => self.builder
-                                .build_signed_int_to_float(
-                                    value.into_int_value(),
-                                    self.context.f32_type(),
-                                    "",
-                                )
-                                .map(|v| v.as_basic_value_enum())
-                                .ok(),
+                            TypesKind::I32 | TypesKind::U32 | TypesKind::U8 | TypesKind::I64 | TypesKind::U64 => {
+                                let dest_type = real_new_typ.into_int_type();
+                                if int_val.get_type().get_bit_width() < dest_type.get_bit_width() {
+                                    self.builder
+                                        .build_int_z_extend(int_val, dest_type, "")
+                                        .map(|v| v.as_basic_value_enum())
+                                        .ok()
+                                } else if int_val.get_type().get_bit_width() > dest_type.get_bit_width() {
+                                    self.builder
+                                        .build_int_truncate(int_val, dest_type, "")
+                                        .map(|v| v.as_basic_value_enum())
+                                        .ok()
+                                } else {
+                                    return Ok((Box::new(value), old_type));
+                                }
+                            }
+                            TypesKind::F32 | TypesKind::F64 => {
+                                self.builder
+                                    .build_unsigned_int_to_float(
+                                        int_val,
+                                        real_new_typ.into_float_type(),
+                                        "",
+                                    )
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
                             TypesKind::Void => None,
-                            TypesKind::Ptr(ptr_type) => {
-                                let target_type = self.convert_type_normal(&ptr_type).map_err(|e1| {CodeError::void_type(new_type.token)})?.ptr_type(AddressSpace::default());
+                            TypesKind::Ptr(_) | TypesKind::Pointer => {
                                 self.builder
-                                    .build_int_to_ptr(value.into_int_value(), target_type, "")
+                                    .build_int_to_ptr(int_val, real_new_typ.into_pointer_type(), "")
                                     .map(|v| v.as_basic_value_enum())
                                     .ok()
                             }
-                            TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
-                            TypesKind::Pointer => {
-                                let target_type = self.context.ptr_type(AddressSpace::default());
-                                self.builder
-                                    .build_int_to_ptr(value.into_int_value(), target_type, "")
-                                    .map(|v| v.as_basic_value_enum())
-                                    .ok()
-                            }
-                            _ => todo!("Implement more types")
-                        }
-                    }
-                    TypesKind::F32 => {
-                        match new_type.kind {
-                            TypesKind::F32 => return Ok((Box::new(value), old_type)),
-                            TypesKind::I32 => self.builder
-                                .build_float_to_signed_int(
-                                    value.into_float_value(),
-                                    self.context.i32_type(),
-                                    "",
-                                )
-                                .map(|v| v.as_basic_value_enum())
-                                .ok(),
                             _ => None,
                         }
                     }
-                    TypesKind::Void => None,
-                    TypesKind::Ptr(_) | TypesKind::Pointer => {
+                    TypesKind::F32 | TypesKind::F64 => {
+                        let float_val = value.into_float_value();
                         match &new_type.kind {
-                            TypesKind::I32 => self.builder
-                                .build_ptr_to_int(
-                                    value.into_pointer_value(),
-                                    self.context.i32_type(),
-                                    "",
-                                )
-                                .map(|v| v.as_basic_value_enum())
-                                .ok(),
-                            TypesKind::Ptr(ptr_type) => {
-                                let target_type = self.convert_type_normal(ptr_type).map_err(|_| {CodeError::void_type(new_type.token)})?.ptr_type(AddressSpace::default());
-                                self.builder
-                                    .build_pointer_cast(value.into_pointer_value(), target_type, "")
-                                    .map(|v| v.as_basic_value_enum())
-                                    .ok()
+                            TypesKind::F32 | TypesKind::F64 => {
+                                let dest_type = real_new_typ.into_float_type();
+                                if float_val.get_type().size_of().get_sign_extended_constant().unwrap() < dest_type.size_of().get_sign_extended_constant().unwrap() {
+                                    self.builder
+                                        .build_float_ext(float_val, dest_type, "")
+                                        .map(|v| v.as_basic_value_enum())
+                                        .ok()
+                                } else if float_val.get_type().size_of().get_sign_extended_constant().unwrap() > dest_type.size_of().get_sign_extended_constant().unwrap() {
+                                    self.builder
+                                        .build_float_trunc(float_val, dest_type, "")
+                                        .map(|v| v.as_basic_value_enum())
+                                        .ok()
+                                } else {
+                                    return Ok((Box::new(value), old_type));
+                                }
                             }
-                            TypesKind::Pointer => {
-                                let target_type = self.context.ptr_type(AddressSpace::default());
+                            TypesKind::I32 | TypesKind::I64 | TypesKind::U32 | TypesKind::U64 | TypesKind::U8 => {
                                 self.builder
-                                    .build_pointer_cast(value.into_pointer_value(), target_type, "")
+                                    .build_float_to_unsigned_int(
+                                        float_val,
+                                        real_new_typ.into_int_type(),
+                                        "",
+                                    )
                                     .map(|v| v.as_basic_value_enum())
                                     .ok()
                             }
                             _ => None,
                         }
                     }
-                    TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
-                    _ => todo!("Add more types")
+                    TypesKind::Ptr(_) | TypesKind::Pointer => {
+                        let ptr_val = value.into_pointer_value();
+                        match &new_type.kind {
+                            TypesKind::I32 | TypesKind::I64 | TypesKind::U32 | TypesKind::U64 => {
+                                self.builder
+                                    .build_ptr_to_int(ptr_val, real_new_typ.into_int_type(), "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                            TypesKind::Ptr(ptr_type) => {
+                                let target_type = self.convert_type_normal(ptr_type)
+                                    .map_err(|_| CodeError::void_type(new_type.token))?
+                                    .ptr_type(AddressSpace::default());
+                                self.builder
+                                    .build_pointer_cast(ptr_val, target_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                            TypesKind::Pointer => {
+                                let target_type = self.context.ptr_type(AddressSpace::default());
+                                self.builder
+                                    .build_pointer_cast(ptr_val, target_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                            _ => None,
+                        }
+                    }
+                    TypesKind::Void | TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
                 };
-                (Box::new(result.ok_or_else(|| {CodeError::invalid_cast(new_type.token, &new_type.kind, &old_type)})?), new_type.kind)
+
+                (Box::new(result.ok_or_else(|| {
+                    CodeError::invalid_cast(new_type.token, &new_type.kind, &old_type)
+                })?), new_type.kind)
             }
             ExpressionKind::Reference { var } => {
                 let def = check_ls_gs_defs(&var.content, &function.function_scope, global_scope).ok_or_else(|| {

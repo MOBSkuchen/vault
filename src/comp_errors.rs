@@ -53,6 +53,7 @@ pub enum CodeErrorType {
     InvalidVarDef,
     NonVoidReturn,
     Unable2Cast,
+    Uncastable,
 }
 
 #[derive(Debug)]
@@ -202,7 +203,7 @@ impl CodeError {
             "Unable to cast incompatible types".to_string(),
             Some(format!("Cast as type `{new_typ}`")),
             format!("Can not cast an expression of type `{expr_typ}` to `{new_typ}`"),
-            vec![]
+            vec!["You may not cast a function / struct (either way)".to_string()]
         )
     }
 
