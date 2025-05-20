@@ -88,6 +88,13 @@ fn basic_value_box_into_float<'a>(value: Box<(dyn BasicValue<'a> + 'a)>) -> Floa
     value.as_basic_value_enum().into_float_value()
 }
 
+macro_rules! build_bin_op {
+    ($builder:expr, $kind:ident, $lhs:expr, $rhs:expr, $op:ident, $expect:expr) => {
+        Box::new($builder.$kind($lhs, $rhs, "").expect($expect))
+    };
+}
+
+
 pub struct Compiler<'ctx> {
     context: &'ctx Context,
     builder: &'ctx Builder<'ctx>,
@@ -146,77 +153,66 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn visit_bin_op<'a>(&'a self, lhs: Box<(dyn BasicValue<'a> + 'a)>, rhs: Box<(dyn BasicValue<'a> + 'a)>, op: BinaryOp, typ: &TypesKind) -> CodeResult<Box<dyn BasicValue + 'a>> {
-        Ok(match typ {
-            TypesKind::I32 => {
+        let result: Box<dyn BasicValue<'a>> = match typ {
+            TypesKind::I32 | TypesKind::U32 | TypesKind::I64 | TypesKind::U64 | TypesKind::U8 => {
+                let lhs = basic_value_box_into_int(lhs);
+                let rhs = basic_value_box_into_int(rhs);
+
+                let build_cmp = |pred| self.builder.build_int_compare(pred, lhs, rhs, "").expect("Int comparison failed");
+
                 match op {
-                    BinaryOp::Eq => Box::new(self.builder.build_int_compare(IntPredicate::EQ, basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-EQ failed")),
-                    BinaryOp::Neq => Box::new(self.builder.build_int_compare(IntPredicate::NE, basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-NEQ failed")),
-                    BinaryOp::Gt => Box::new(self.builder.build_int_compare(IntPredicate::SGT, basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-GT failed")),
-                    BinaryOp::Gte => Box::new(self.builder.build_int_compare(IntPredicate::SGE, basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-GTE failed")),
-                    BinaryOp::Lt => Box::new(self.builder.build_int_compare(IntPredicate::SLT, basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-LT failed")),
-                    BinaryOp::Lte => Box::new(self.builder.build_int_compare(IntPredicate::SLE, basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-LTE failed")),
-                    BinaryOp::Add => Box::new(self.builder.build_int_add(basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-SUB failed")),
-                    BinaryOp::Sub => Box::new(self.builder.build_int_sub(basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-Addition failed")),
-                    BinaryOp::Div => Box::new(self.builder.build_int_signed_div(basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-Addition failed")),
-                    BinaryOp::Mul => Box::new(self.builder.build_int_mul(basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-MUL failed")),
-                    BinaryOp::And => Box::new(self.builder.build_and(basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-AND failed")),
-                    BinaryOp::Or => Box::new(self.builder.build_or(basic_value_box_into_int(lhs), basic_value_box_into_int(rhs), "")
-                        .expect("SI-OR failed")),
+                    BinaryOp::Eq  => Box::new(build_cmp(IntPredicate::EQ).as_basic_value_enum()),
+                    BinaryOp::Neq => Box::new(build_cmp(IntPredicate::NE).as_basic_value_enum()),
+                    BinaryOp::Gt  => Box::new(build_cmp(IntPredicate::UGT).as_basic_value_enum()),
+                    BinaryOp::Gte => Box::new(build_cmp(IntPredicate::UGE).as_basic_value_enum()),
+                    BinaryOp::Lt  => Box::new(build_cmp(IntPredicate::ULT).as_basic_value_enum()),
+                    BinaryOp::Lte => Box::new(build_cmp(IntPredicate::ULE).as_basic_value_enum()),
+                    BinaryOp::Add => Box::new(self.builder.build_int_add(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
+                    BinaryOp::Sub => Box::new(self.builder.build_int_sub(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
+                    BinaryOp::Mul => Box::new(self.builder.build_int_mul(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
+                    BinaryOp::Div => Box::new(self.builder.build_int_unsigned_div(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
+                    BinaryOp::And => Box::new(self.builder.build_and(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
+                    BinaryOp::Or  => Box::new(self.builder.build_or(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
                 }
             }
-            TypesKind
-            ::F32 => {
+
+            TypesKind::F32 | TypesKind::F64 => {
+                let lhs = basic_value_box_into_float(lhs);
+                let rhs = basic_value_box_into_float(rhs);
+
+                let build_cmp = |pred| self.builder.build_float_compare(pred, lhs, rhs, "")
+                    .expect("Float comparison failed");
+
                 match op {
-                    BinaryOp::Eq => Box::new(self.builder.build_float_compare(FloatPredicate::OEQ, basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-EQ failed")),
-                    BinaryOp::Neq => Box::new(self.builder.build_float_compare(FloatPredicate::ONE, basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-NEQ failed")),
-                    BinaryOp::Gt => Box::new(self.builder.build_float_compare(FloatPredicate::OGT, basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-GT failed")),
-                    BinaryOp::Gte => Box::new(self.builder.build_float_compare(FloatPredicate::OGE, basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-GTE failed")),
-                    BinaryOp::Lt => Box::new(self.builder.build_float_compare(FloatPredicate::OLT, basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-LT failed")),
-                    BinaryOp::Lte => Box::new(self.builder.build_float_compare(FloatPredicate::OLE, basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-LTE failed")),
-                    BinaryOp::Add => Box::new(self.builder.build_float_add(basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-SUB failed")),
-                    BinaryOp::Sub => Box::new(self.builder.build_float_sub(basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-Addition failed")),
-                    BinaryOp::Div => Box::new(self.builder.build_float_div(basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-Addition failed")),
-                    BinaryOp::Mul => Box::new(self.builder.build_float_mul(basic_value_box_into_float(lhs), basic_value_box_into_float(rhs), "")
-                        .expect("OF-MUL failed")),
-                    BinaryOp::And => {
-                        let left_i = self.builder.build_cast(InstructionOpcode::FPToSI, basic_value_box_into_float(lhs), self.context.i32_type(), "").expect("Failed to cast rhs float32 to si32");
-                        let right_i = self.builder.build_cast(InstructionOpcode::FPToSI, basic_value_box_into_float(rhs), self.context.i32_type(), "").expect("Failed to cast rhs float32 to si32");
-                        Box::new(self.builder.build_and(left_i.into_int_value(), right_i.into_int_value(), "")
-                            .expect("OF-AND failed"))
-                    }
-                    BinaryOp::Or => {
-                        let left_i = self.builder.build_cast(InstructionOpcode::FPToSI, basic_value_box_into_float(lhs), self.context.i32_type(), "").expect("Failed to cast rhs float32 to si32");
-                        let right_i = self.builder.build_cast(InstructionOpcode::FPToSI, basic_value_box_into_float(rhs), self.context.i32_type(), "").expect("Failed to cast rhs float32 to si32");
-                        Box::new(self.builder.build_or(left_i.into_int_value(), right_i.into_int_value(), "")
-                            .expect("OF-OR failed"))
+                    BinaryOp::Eq  => Box::new(build_cmp(FloatPredicate::OEQ).as_basic_value_enum()),
+                    BinaryOp::Neq => Box::new(build_cmp(FloatPredicate::ONE).as_basic_value_enum()),
+                    BinaryOp::Gt  => Box::new(build_cmp(FloatPredicate::OGT).as_basic_value_enum()),
+                    BinaryOp::Gte => Box::new(build_cmp(FloatPredicate::OGE).as_basic_value_enum()),
+                    BinaryOp::Lt  => Box::new(build_cmp(FloatPredicate::OLT).as_basic_value_enum()),
+                    BinaryOp::Lte => Box::new(build_cmp(FloatPredicate::OLE).as_basic_value_enum()),
+                    BinaryOp::Add => Box::new(self.builder.build_float_add(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
+                    BinaryOp::Sub => Box::new(self.builder.build_float_sub(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
+                    BinaryOp::Mul => Box::new(self.builder.build_float_mul(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
+                    BinaryOp::Div => Box::new(self.builder.build_float_div(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
+                    BinaryOp::And | BinaryOp::Or => {
+                        let int_ty = self.context.i32_type();
+                        let lhs_int = self.builder.build_cast(InstructionOpcode::FPToSI, lhs, int_ty, "")
+                            .expect("Cast float to int lhs").into_int_value();
+                        let rhs_int = self.builder.build_cast(InstructionOpcode::FPToSI, rhs, int_ty, "")
+                            .expect("Cast float to int rhs").into_int_value();
+                        let logic_op = match op {
+                            BinaryOp::And => self.builder.build_and(lhs_int, rhs_int, ""),
+                            BinaryOp::Or  => self.builder.build_or(lhs_int, rhs_int, ""),
+                            _ => unreachable!(),
+                        };
+                        Box::new(logic_op.expect("Float logic failed"))
                     }
                 }
             }
-            // Types::Void => {}
-            // Types::Struct { .. } => {}
-            // Types::Function { .. } => {}
-            _ => {panic!("Can not perform binary operations on this type!")}
-        })
+
+            _ => panic!(""),
+        };
+        Ok(result)
     }
     
     fn null(&self) -> IntValue<'ctx> {
