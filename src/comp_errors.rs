@@ -54,6 +54,7 @@ pub enum CodeErrorType {
     NonVoidReturn,
     Unable2Cast,
     Uncastable,
+    ToplevelStatement,
 }
 
 #[derive(Debug)]
@@ -90,10 +91,6 @@ impl CodeError {
             pointer,
             notes,
         }
-    }
-
-    pub fn placeholder() -> Self {
-        panic!("Please remove this placeholder!");
     }
 
     pub fn new_unexpected_token_error(
@@ -259,6 +256,19 @@ impl CodeError {
             Some("Called here".to_string()),
             format!("The name `{}` is found, but not a symbol", token.content),
             vec![]
+        )
+    }
+
+    pub fn toplevel_statement(cpos: CodePosition) -> Self {
+        Self::new(
+            cpos,
+            CodeErrorType::ToplevelStatement,
+            "Not a top level statement".to_string(),
+            Some("here".to_string()),
+            "This kind of statement is only allowed in a function".to_string(),
+            vec![
+                "Only function definitions and imports are top level statements".to_string(),
+                "Maybe you forgot to put it into a function?".to_string()]
         )
     }
 

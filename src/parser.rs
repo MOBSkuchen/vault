@@ -133,7 +133,6 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.peek(pointer) {
             match token.token_type {
-                // Parse function definitions
                 TokenType::Define => {
                     self.advance(pointer);
                     let func = self.parse_function(pointer)?;
@@ -147,7 +146,7 @@ impl<'a> Parser<'a> {
                 // }
 
                 _ => {
-                    return Err(CodeError::placeholder());
+                    return Err(CodeError::toplevel_statement(token.code_position));
                 }
             }
         }
@@ -453,12 +452,8 @@ impl<'a> Parser<'a> {
                 TokenType::String => Ok(Expression {expression: ExpressionKind::String(token), code_position: token.code_position}),
                 TokenType::LParen => {
                     let expr = self.parse_expression(pointer)?;
-                    if self.match_token(pointer, TokenType::RParen)? {
-                        Ok(expr)
-                    } else {
-                        println!("LParen");
-                        Err(CodeError::placeholder())
-                    }
+                    self.consume(pointer, TokenType::RParen, None)?;
+                    Ok(expr)
                 }
                 _ => Err(CodeError::new_unexpected_token_error(
                     self.previous(pointer).unwrap(),

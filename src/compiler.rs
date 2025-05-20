@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hint::unreachable_unchecked;
 use std::ops::Deref;
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use inkwell::basic_block::BasicBlock;
@@ -526,7 +527,7 @@ impl<'ctx> Compiler<'ctx> {
                 AST::FunctionDef { ret, fmode, name, params, body } => {
                     self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body)?;
                 }
-                _ => panic!("This is not a top-level statement!"),
+                _ => unreachable!()
             }
         }
         Ok(module)
