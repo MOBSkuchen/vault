@@ -12,6 +12,7 @@ anstream = "0.6.18"
 colorize-rs = "0.1.2"
 clap = "4.5.38"
 clap_builder = "4.5.38"
+lld-rx = "0.1.1"
 
 [profile.release]
 lto = true
