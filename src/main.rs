@@ -1,4 +1,6 @@
+use std::env::temp_dir;
 use std::fmt::{Display, Formatter};
+use std::fs;
 use clap::{Arg, ValueHint};
 use clap_builder::builder::TypedValueParser;
 use clap_builder::Command;
@@ -244,7 +246,9 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
 
     let file_manager = file_manager_r.unwrap();
     
-    let tmp_file = format!("tmp_{}.o", link_job_data.output);
+    let mut tmp_file = temp_dir();
+    tmp_file.push(format!("tmp_{}.o", link_job_data.output));
+    let tmp_file = tmp_file.to_str().unwrap().to_string();
     
     let compile_job_data = CompileJobData {
         output: tmp_file.clone(),
