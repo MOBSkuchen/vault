@@ -270,9 +270,13 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
         libs.push("sila-stdlib-win.a".to_string())
     }
     
+    println!("Linking `{tmp_file}` with `{:?}`", libs);
+    
     lld_link(link_job_data.output_type.into(), 
-             vec![tmp_file], link_job_data.output, link_job_data.lib, libs,
+             vec![tmp_file], &link_job_data.output, link_job_data.lib, libs,
              if link_job_data.lib { None } else { Some(link_job_data.entry) }, ProdType::Console);
+    
+    println!("Finished writing file to `{}`", link_job_data.output);
 
     false
 }
@@ -280,7 +284,7 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
 fn main() {
     let tt = TargetMachine::get_default_triple();
     let tt = tt.as_str().to_str().unwrap();
-    let matches = clap::Command::new(NAME)
+    let matches = Command::new(NAME)
         .about(DESCRIPTION)
         .version(VERSION)
         .author("MOBSkuchen")

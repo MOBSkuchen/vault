@@ -32,7 +32,7 @@ fn set_entry(lld_flavor: &LldFlavor, args: &mut Vec<String>, entry: String) {
     }
 }
 
-fn set_output(lld_flavor: &LldFlavor, args: &mut Vec<String>, output: String) {
+fn set_output(lld_flavor: &LldFlavor, args: &mut Vec<String>, output: &String) {
     match lld_flavor {
         LldFlavor::Elf => {
             args.push(format!("-o \"{}\"", output));
@@ -49,7 +49,7 @@ fn set_output(lld_flavor: &LldFlavor, args: &mut Vec<String>, output: String) {
     }
 }
 
-pub fn lld_link(target: LldFlavor, input_files: Vec<String>, output_path: String, 
+pub fn lld_link(target: LldFlavor, input_files: Vec<String>, output_path: &String, 
             is_lib: bool, mut extra_args: Vec<String>, 
             start_symbol: Option<String>, prod_type: ProdType) -> LldResult {
     if is_lib && start_symbol.is_some() {
