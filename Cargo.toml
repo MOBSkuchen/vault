@@ -1,5 +1,5 @@
 [package]
-name = "cmm"
+name = "sila"
 description = "EZ low level programming language"
 version = "0.1.0"
 edition = "2024"
