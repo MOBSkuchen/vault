@@ -42,7 +42,19 @@ impl Display for OptLevel {
 enum OutputType {
     Object,
     Asm,
-    IR
+    IR,
+    BC
+}
+
+impl OutputType {
+    pub fn to_f_ext(&self) -> String {
+        match self {
+            OutputType::Object => "o",
+            OutputType::Asm => "asm",
+            OutputType::IR => "ir",
+            OutputType::BC => "bc"
+        }.to_string()
+    }
 }
 
 impl Display for OutputType {
@@ -50,7 +62,8 @@ impl Display for OutputType {
         write!(f, "{}", match self {
             OutputType::Object => "object",
             OutputType::Asm => "asm",
-            OutputType::IR => "ir"
+            OutputType::IR => "ir",
+            &OutputType::BC => "bc"
         })
     }
 }
@@ -71,6 +84,7 @@ impl From<Option<&String>> for OutputType {
                 if s == "object" || s == "o" || s == "obj" {OutputType::Object}
                 else if s == "asm" || s == "assembly" {OutputType::Asm}
                 else if s == "ir" || s == "ll" {OutputType::IR}
+                else if s == "bc" || s == "bitcode" {OutputType::BC}
                 else {println!("unrecognized output-type `{s}`, defaulting to object"); OutputType::Object}
             }
         }
@@ -123,12 +137,16 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let compiler = Compiler::new(&context, &builder, compile_job_data.module_id);
 
     let module = compiler.comp_ast(module, ast)?;
+    module.print_to_stderr();
+    module.verify().expect("VERIFY");
     let codegen = Codegen::new(Some(compile_job_data.target_triple), None, None, None);
     codegen.optimize(&module, &compile_job_data.optimization);
+    module.print_to_stderr();
     let file = match compile_job_data.output_type {
         OutputType::Object => codegen.gen_obj(&module, compile_job_data.output),
         OutputType::Asm => codegen.gen_asm(&module, compile_job_data.output),
         OutputType::IR => codegen.gen_ir(&module, compile_job_data.output),
+        OutputType::BC => codegen.gen_bc(&module, compile_job_data.output)
     };
     println!("Finished writing to `{file}`!");
     Ok(())
@@ -146,7 +164,10 @@ fn compile(filepath: String, compile_job_data: CompileJobData) -> bool {
     let x = compile_job(&file_manager, compile_job_data);
     if let Err(item) = x {
         item.visualize_error(&file_manager);
+        
+        println!("\nAn error has occurred during compilation, terminating compilation.")
     }
+    
     false
 }
 
@@ -159,12 +180,12 @@ fn main() {
         .author("MOBSkuchen")
         .help_template("
 {before-help}{name} {version} \"{about}\"
-by {author}
+by {author} -> Powered by LLVM
 {usage-heading} {usage}
 
 {all-args}{after-help}
 
-Available output types: ASM, IR, OBJECT (default)
+Available output types: ASM, IR, BC, OBJECT (default)
 
 This is a temporary build - critical breaking changes WILL occur. Be warned.
 ")
@@ -222,7 +243,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
     if let Some(item) = matches.get_one::<String>("compile") {
         let mut output = matches.get_one::<&str>("output").unwrap_or(&"output").to_string();
         let output_type: OutputType = matches.get_one::<String>("out-type").into();
-        if !matches.contains_id("output") {output = format!("{output}.{output_type}")}
+        if !matches.contains_id("output") {output = format!("{output}.{}", output_type.to_f_ext())}
         let module_id = matches.get_one::<&str>("module-id").unwrap_or(&"main").to_string();
         let optimization: OptLevel = matches.get_one::<String>("optimization").into();
         let target_triple = 
