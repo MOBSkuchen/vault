@@ -49,7 +49,7 @@ fn set_output(lld_flavor: &LldFlavor, args: &mut Vec<String>, output: &String) {
     }
 }
 
-pub fn lld_link(target: LldFlavor, input_files: Vec<String>, output_path: &String, 
+pub fn lld_link(target: LldFlavor, input_files: Vec<String>, output_path: &String,
             is_lib: bool, mut extra_args: Vec<String>, 
             start_symbol: Option<String>, prod_type: ProdType) -> LldResult {
     if is_lib && start_symbol.is_some() {
@@ -62,9 +62,11 @@ pub fn lld_link(target: LldFlavor, input_files: Vec<String>, output_path: &Strin
         args.push("/dll".into())
     }
     
+    args.push("/nodefaultlib".to_string());
+    
     // Windows only
     if let LldFlavor::Coff = target { args.push(prod_type.to_arg()) }
-    
+
     if start_symbol.is_some() {
         set_entry(&target, &mut args, start_symbol.unwrap());
     }

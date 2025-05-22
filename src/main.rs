@@ -192,6 +192,7 @@ impl Display for CompileJobData {
 
 fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> CodeResult<()> {
     let tokens = tokenize(file_manager.get_content())?;
+    println!("{:?}", tokens);
     println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
 
     let parser = Parser::new(tokens, file_manager);
@@ -245,11 +246,11 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
     }
 
     let file_manager = file_manager_r.unwrap();
-    
+
     let mut tmp_file = temp_dir();
     tmp_file.push(format!("tmp_{}.o", link_job_data.output));
     let tmp_file = tmp_file.to_str().unwrap().to_string();
-    
+
     let compile_job_data = CompileJobData {
         output: tmp_file.clone(),
         target_triple: TargetMachine::get_default_triple(),
@@ -264,18 +265,22 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
         println!("\nAn error has occurred during compilation, terminating compilation.");
         return false
     }
-    
+
     let mut libs = link_job_data.libs;
+    // Required libs for windows
     if link_job_data.stdlib {
-        libs.push("sila-stdlib-win.a".to_string())
+        libs.push("sila-stdlib-win.lib".to_string());
+        libs.push("kernel32.lib".to_string());
+        libs.push("ucrt.lib".to_string());
+        libs.push("msvcrt.lib".to_string());
     }
-    
+
     println!("Linking `{tmp_file}` with `{:?}`", libs);
-    
-    lld_link(link_job_data.output_type.into(), 
+
+    lld_link(link_job_data.output_type.into(),
              vec![tmp_file], &link_job_data.output, link_job_data.lib, libs,
              if link_job_data.lib { None } else { Some(link_job_data.entry) }, ProdType::Console);
-    
+
     println!("Finished writing file to `{}`", link_job_data.output);
 
     false
