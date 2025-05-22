@@ -2,8 +2,6 @@ use inkwell::module::Module;
 use inkwell::OptimizationLevel;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
-use rand::{rng, Rng};
-use rand::distr::Alphanumeric;
 use crate::OptLevel;
 
 pub struct Codegen {
@@ -53,26 +51,23 @@ impl Codegen {
         module.run_passes(pass, &self.create_target_machine(), pb).expect("Failed to optimize module!")
     }
 
-    fn gen_dest_path() -> String {
-        rng()
-            .sample_iter(&Alphanumeric)
-            .take(30)
-            .map(char::from)
-            .collect()
-    }
-
     pub fn gen_obj(&self, module: &Module, path: String) -> String {
-        self.create_target_machine().write_to_file(module, FileType::Object, (&path).as_ref()).expect("TODO: panic message");
+        self.create_target_machine().write_to_file(module, FileType::Object, path.as_ref()).expect("TODO: panic message");
         path
     }
 
     pub fn gen_asm(&self, module: &Module, path: String) -> String {
-        self.create_target_machine().write_to_file(module, FileType::Assembly, (&path).as_ref()).expect("TODO: panic message");
+        self.create_target_machine().write_to_file(module, FileType::Assembly, path.as_ref()).expect("TODO: panic message");
         path
     }
 
     pub fn gen_ir(&self, module: &Module, path: String) -> String {
         module.print_to_file(&path).expect("Failed to write module to file");
+        path
+    }
+
+    pub fn gen_bc(&self, module: &Module, path: String) -> String {
+        module.write_bitcode_to_path(&path);
         path
     }
 }

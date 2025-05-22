@@ -1,13 +1,12 @@
 use std::collections::HashMap;
-use std::hint::unreachable_unchecked;
 use std::ops::Deref;
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use inkwell::basic_block::BasicBlock;
-use inkwell::builder::Builder;
+use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FloatType, FunctionType, IntType};
-use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntValue, PointerValue};
+use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::comp_errors::{CodeError, CodeResult};
 use crate::lexer::Token;
 use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
@@ -66,9 +65,9 @@ impl<'ctx> Function<'ctx> {
         Self { compiler, function_value, ret, function_scope: Namespace::new(), name }
     }
 
-    pub fn new_block(&self, block_name: &str) -> BasicBlock<'ctx> {
+    pub fn new_block(&self, block_name: &str, pae: bool) -> BasicBlock<'ctx> {
         let bb = self.compiler.context.append_basic_block(self.function_value, block_name);
-        self.compiler.builder.position_at_end(bb);
+        if pae { self.compiler.builder.position_at_end(bb) }
         bb
     }
 }
@@ -134,6 +133,7 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::I64 | TypesKind::U64 => Ok(Box::new(self.context.i32_type())),
             TypesKind::F64  => Ok(Box::new(self.context.f64_type())),
             TypesKind::U8 => Ok(Box::new(self.context.i8_type())),
+            TypesKind::Bool => Ok(Box::new(self.context.custom_width_int_type(1).as_basic_type_enum())),
         }
     }
 
@@ -161,30 +161,36 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::I64 | TypesKind::U64 => Ok(self.context.i64_type().fn_type(&param_types, false)),
             TypesKind::F64 => Ok(self.context.f64_type().fn_type(&param_types, false)),
             TypesKind::U8 => Ok(self.context.i8_type().fn_type(&param_types, false)),
+            TypesKind::Bool => Ok(self.context.custom_width_int_type(1).fn_type(&param_types, false)),
         }
     }
+    
+    fn to_bool_int<'a>(&'a self, cond: IntValue<'a>) -> Box<dyn BasicValue + 'a> {
+        Box::new(self.builder.build_int_compare(IntPredicate::NE, cond, self.context.custom_width_int_type(1).const_zero(), "is_nonzero").expect("Failed cond comp").as_basic_value_enum())
+    }
 
-    fn visit_bin_op<'a>(&'a self, lhs: Box<(dyn BasicValue<'a> + 'a)>, rhs: Box<(dyn BasicValue<'a> + 'a)>, op: BinaryOp, typ: &TypesKind) -> CodeResult<Box<dyn BasicValue + 'a>> {
-        let result: Box<dyn BasicValue<'a>> = match typ {
+    fn visit_bin_op<'a>(&'a self, lhs: Box<(dyn BasicValue<'a> + 'a)>, rhs: Box<(dyn BasicValue<'a> + 'a)>, op: BinaryOp, typ: TypesKind) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
+        let result: (Box<dyn BasicValue<'a>>, TypesKind) = match typ {
             TypesKind::I32 | TypesKind::U32 | TypesKind::I64 | TypesKind::U64 | TypesKind::U8 => {
                 let lhs = basic_value_box_into_int(lhs);
                 let rhs = basic_value_box_into_int(rhs);
 
-                let build_cmp = |pred| self.builder.build_int_compare(pred, lhs, rhs, "").expect("Int comparison failed");
+                let build_cmp = |pred| self.to_bool_int(self.builder.build_int_compare(pred, lhs, rhs, "").expect("Int comparison failed"));
 
                 match op {
-                    BinaryOp::Eq  => Box::new(build_cmp(IntPredicate::EQ).as_basic_value_enum()),
-                    BinaryOp::Neq => Box::new(build_cmp(IntPredicate::NE).as_basic_value_enum()),
-                    BinaryOp::Gt  => Box::new(build_cmp(IntPredicate::UGT).as_basic_value_enum()),
-                    BinaryOp::Gte => Box::new(build_cmp(IntPredicate::UGE).as_basic_value_enum()),
-                    BinaryOp::Lt  => Box::new(build_cmp(IntPredicate::ULT).as_basic_value_enum()),
-                    BinaryOp::Lte => Box::new(build_cmp(IntPredicate::ULE).as_basic_value_enum()),
-                    BinaryOp::Add => Box::new(self.builder.build_int_add(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
-                    BinaryOp::Sub => Box::new(self.builder.build_int_sub(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
-                    BinaryOp::Mul => Box::new(self.builder.build_int_mul(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
-                    BinaryOp::Div => Box::new(self.builder.build_int_unsigned_div(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
-                    BinaryOp::And => Box::new(self.builder.build_and(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
-                    BinaryOp::Or  => Box::new(self.builder.build_or(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()),
+                    BinaryOp::Eq  => (Box::new(build_cmp(IntPredicate::EQ).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Neq => (Box::new(build_cmp(IntPredicate::NE).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Gt  => (Box::new(build_cmp(IntPredicate::UGT).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Gte => (Box::new(build_cmp(IntPredicate::UGE).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Lt  => (Box::new(build_cmp(IntPredicate::ULT).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Lte => (Box::new(build_cmp(IntPredicate::ULE).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::And => (Box::new(self.builder.build_and(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Or  => (Box::new(self.builder.build_or(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()), TypesKind::Bool),
+                    
+                    BinaryOp::Add => (Box::new(self.builder.build_int_add(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()), typ),
+                    BinaryOp::Sub => (Box::new(self.builder.build_int_sub(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()), typ),
+                    BinaryOp::Mul => (Box::new(self.builder.build_int_mul(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()), typ),
+                    BinaryOp::Div => (Box::new(self.builder.build_int_unsigned_div(lhs, rhs, "").expect("Failed int op").as_basic_value_enum()), typ),
                 }
             }
 
@@ -192,20 +198,15 @@ impl<'ctx> Compiler<'ctx> {
                 let lhs = basic_value_box_into_float(lhs);
                 let rhs = basic_value_box_into_float(rhs);
 
-                let build_cmp = |pred| self.builder.build_float_compare(pred, lhs, rhs, "")
-                    .expect("Float comparison failed");
+                let build_cmp = |pred| self.to_bool_int(self.builder.build_float_compare(pred, lhs, rhs, "").expect("Float comparison failed"));
 
                 match op {
-                    BinaryOp::Eq  => Box::new(build_cmp(FloatPredicate::OEQ).as_basic_value_enum()),
-                    BinaryOp::Neq => Box::new(build_cmp(FloatPredicate::ONE).as_basic_value_enum()),
-                    BinaryOp::Gt  => Box::new(build_cmp(FloatPredicate::OGT).as_basic_value_enum()),
-                    BinaryOp::Gte => Box::new(build_cmp(FloatPredicate::OGE).as_basic_value_enum()),
-                    BinaryOp::Lt  => Box::new(build_cmp(FloatPredicate::OLT).as_basic_value_enum()),
-                    BinaryOp::Lte => Box::new(build_cmp(FloatPredicate::OLE).as_basic_value_enum()),
-                    BinaryOp::Add => Box::new(self.builder.build_float_add(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
-                    BinaryOp::Sub => Box::new(self.builder.build_float_sub(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
-                    BinaryOp::Mul => Box::new(self.builder.build_float_mul(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
-                    BinaryOp::Div => Box::new(self.builder.build_float_div(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()),
+                    BinaryOp::Eq  => (Box::new(build_cmp(FloatPredicate::OEQ).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Neq => (Box::new(build_cmp(FloatPredicate::ONE).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Gt  => (Box::new(build_cmp(FloatPredicate::OGT).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Gte => (Box::new(build_cmp(FloatPredicate::OGE).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Lt  => (Box::new(build_cmp(FloatPredicate::OLT).as_basic_value_enum()), TypesKind::Bool),
+                    BinaryOp::Lte => (Box::new(build_cmp(FloatPredicate::OLE).as_basic_value_enum()), TypesKind::Bool),
                     BinaryOp::And | BinaryOp::Or => {
                         let int_ty = self.context.i32_type();
                         let lhs_int = self.builder.build_cast(InstructionOpcode::FPToSI, lhs, int_ty, "")
@@ -217,8 +218,12 @@ impl<'ctx> Compiler<'ctx> {
                             BinaryOp::Or  => self.builder.build_or(lhs_int, rhs_int, ""),
                             _ => unreachable!(),
                         };
-                        Box::new(logic_op.expect("Float logic failed"))
+                        (Box::new(logic_op.expect("Float logic failed")), TypesKind::Bool)
                     }
+                    BinaryOp::Add => (Box::new(self.builder.build_float_add(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()), typ),
+                    BinaryOp::Sub => (Box::new(self.builder.build_float_sub(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()), typ),
+                    BinaryOp::Mul => (Box::new(self.builder.build_float_mul(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()), typ),
+                    BinaryOp::Div => (Box::new(self.builder.build_float_div(lhs, rhs, "").expect("Failed float op").as_basic_value_enum()), typ),
                 }
             }
 
@@ -255,7 +260,7 @@ impl<'ctx> Compiler<'ctx> {
                 if l_typ != r_typ {
                     return Err(CodeError::type_mismatch(&cpos, &r_typ, &l_typ, vec!["This is because the right side must have the same type as the left side".to_string()]));
                 }
-                (Box::new(self.visit_bin_op(lhs_val, rhs_val, op.1, &l_typ)?.as_basic_value_enum()), l_typ)
+                self.visit_bin_op(lhs_val, rhs_val, op.1, l_typ)?
             }
             ExpressionKind::FunctionCall { name, arguments } => {
                 let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).ok_or_else(|| {
@@ -302,10 +307,10 @@ impl<'ctx> Compiler<'ctx> {
                     .as_basic_type_enum();
 
                 let result = match old_type {
-                    TypesKind::I32 | TypesKind::U32 | TypesKind::U8 | TypesKind::I64 | TypesKind::U64 => {
+                    TypesKind::I32 | TypesKind::U32 | TypesKind::U8 | TypesKind::I64 | TypesKind::U64 | TypesKind::Bool => {
                         let int_val = value.into_int_value();
                         match &new_type.kind {
-                            TypesKind::I32 | TypesKind::U32 | TypesKind::U8 | TypesKind::I64 | TypesKind::U64 => {
+                            TypesKind::I32 | TypesKind::U32 | TypesKind::U8 | TypesKind::I64 | TypesKind::U64 | TypesKind::Bool => {
                                 let dest_type = real_new_typ.into_int_type();
                                 if int_val.get_type().get_bit_width() < dest_type.get_bit_width() {
                                     self.builder
@@ -437,7 +442,9 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    fn visit_statement(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace) -> CodeResult<()> {
+    fn visit_statement(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace, after_block: Option<BasicBlock>) -> CodeResult<bool> {
+        let mut inside_loop = after_block.is_some();
+        
         match statement {
             AST::FunctionDef { .. } => panic!("Function definition is not allowed here (YET)"),
             AST::VariableDef { name, value, typ } => {
@@ -486,8 +493,55 @@ impl<'ctx> Compiler<'ctx> {
                     self.builder.build_return(None).expect("Failed to return NONE");
                 }
             },
+            AST::CondLoop(cond) => {
+                inside_loop = true;
+                
+                let cond_block = function.new_block("cond", false);
+                let body_block = function.new_block("body", false); // <- Added body block
+                let after_block = function.new_block("after", false);
+
+                self.builder.build_unconditional_branch(cond_block).expect("Failed to enter cond block");
+
+                self.builder.position_at_end(cond_block);
+                
+                {
+                    let (cond_value, typ) = self.visit_expr(function, global_scope, cond.condition, None, true)?;
+                    // let cond_value = cond_value.as_basic_value_enum().into_int_value();
+                    if typ != TypesKind::Bool {
+                        panic!("Must be a bool")
+                    }
+                    let condition = cond_value.as_basic_value_enum().into_int_value();
+                    println!("{}", condition.get_type());
+                    // let condition = self.builder.build_int_compare(IntPredicate::NE, cond_value, self.null(), "is_nonzero").expect("Failed cond comp");
+                    self.builder.build_conditional_branch(condition, body_block, after_block)
+                        .expect("Failed to make conditional branch");
+                }
+
+                self.builder.position_at_end(body_block);
+                for stmt in cond.body {
+                    let il = self.visit_statement(function, stmt, global_scope, Some(after_block))?;
+                    if !il {
+                        inside_loop = false;
+                        break;
+                    }
+                }
+                self.builder.build_unconditional_branch(cond_block)
+                    .expect("Failed to branch back to condition");
+
+                self.builder.position_at_end(after_block);
+                return Ok(inside_loop);
+            }
+            AST::IfCondition { .. } => todo!("if cond"),
+            AST::Break(tok) => {
+                if let Some(after) = after_block {
+                    self.builder.position_at_end(after);
+                    inside_loop = false;
+                } else {
+                    todo!("add error here")
+                }
+            },
         }
-        Ok(())
+        Ok(inside_loop)
     }
 
     pub(crate) fn visit_function_def<'a>(&'a self, module: &Module<'a>, name: &Token, fmode: FunctionMode, 
@@ -510,10 +564,12 @@ impl<'ctx> Compiler<'ctx> {
         global_scope.definitions.insert(name.content.clone(), (TypesKind::Function {ret: Box::from(return_type.kind.clone()), 
             params: params.iter().map(|x| {x.1.kind.clone()}).collect() }, unsafe { PointerValue::new(function_value.as_value_ref()) }));
 
+        let mut inside_loop = false;
+        
         if let Some(body) = body {
-            function.new_block("entry");
+            function.new_block("entry", true);
             for stmt in body {
-                self.visit_statement(&mut function, stmt, global_scope)?;
+                inside_loop = self.visit_statement(&mut function, stmt, global_scope, None)?;
             }
         }
         

@@ -319,7 +319,7 @@ impl<'a> Parser<'a> {
                     Ok(AST::Expression { expr: res? })
                 }
                 TokenType::Let => {
-                    *pointer += 1;
+                    self.advance(pointer);
                     let name = self.consume(pointer, TokenType::Identifier, None)?;
                     let typ = if self.match_token(pointer, TokenType::Colon)? {
                         Some(self.parse_type(pointer)?)
@@ -332,6 +332,16 @@ impl<'a> Parser<'a> {
                     }
                     Ok(AST::VariableDef {name, typ, value})
                 }
+                TokenType::While => {
+                    self.advance(pointer);
+                    let condition = self.parse_expression(pointer)?;
+                    let body = self.parse_block(pointer)?;
+                    Ok(AST::CondLoop(CondBlock {condition, body}))
+                }
+                TokenType::Break => {
+                    Ok(AST::Break(self.consume(pointer, TokenType::Break, None)?))
+                }
+                TokenType::If => self.parse_if_case(pointer),
                 TokenType::Return => self.parse_return(pointer),
                 _o => Err(CodeError::new_unexpected_token_error(
                     token,
@@ -344,6 +354,26 @@ impl<'a> Parser<'a> {
                 self.previous(pointer).unwrap(),
             ))
         }
+    }
+    
+    fn parse_if_case(&self, pointer: &mut usize) -> CodeResult<AST> {
+        self.advance(pointer);
+        
+        let first = CondBlock {condition: self.parse_expression(pointer)?, body: self.parse_block(pointer)?};
+        
+        let mut elif = vec![];
+        loop {
+            if self.match_token(pointer, TokenType::Elif)? {
+                elif.push(CondBlock {condition: self.parse_expression(pointer)?, body: self.parse_block(pointer)?})
+            }
+            else {break}
+        };
+
+        let other = if self.match_token(pointer, TokenType::Else)? {
+            Some(CondBlock {condition: self.parse_expression(pointer)?, body: self.parse_block(pointer)?})
+        } else { None };
+        
+        Ok(AST::IfCondition {first, other, elif})
     }
 
     fn is_done(&self, pointer: &usize) -> bool {
@@ -415,7 +445,7 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.peek(pointer) {
             match token.token_type {
-                TokenType::Star | TokenType::Slash => {
+                TokenType::Star | TokenType::Slash | TokenType::DoubleEquals | TokenType::Lesser | TokenType::Greater | TokenType::GreaterEquals | TokenType::LesserEquals | TokenType::And | TokenType::Or=> {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_primary(pointer)?;
                     let cpos = node.code_position.merge(right.code_position);
@@ -482,6 +512,7 @@ impl<'a> Parser<'a> {
             else if self.match_token(pointer, TokenType::U64)? { Ok(TypesKind::U64) }
             else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
             else if self.match_token(pointer, TokenType::Ptr)? { Ok(TypesKind::Pointer) }
+            else if self.match_token(pointer, TokenType::Bool)? { Ok(TypesKind::Bool) }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))})?;
 
@@ -493,7 +524,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(Types::new(kind, &self.tokens[*pointer]))
+        Ok(Types::new(kind, &self.tokens[*pointer - 1]))
     }
 }
 
@@ -568,7 +599,8 @@ pub enum TypesKind {
     Ptr(Box<TypesKind>),
     Pointer,
     Struct {name: String},
-    Function {ret: Box<TypesKind>, params: Vec<TypesKind>}
+    Function {ret: Box<TypesKind>, params: Vec<TypesKind>},
+    Bool,
 }
 
 impl Display for TypesKind {
@@ -586,6 +618,7 @@ impl Display for TypesKind {
             TypesKind::Function { .. } => write!(f, "function"),
             TypesKind::Ptr(ptr) => write!(f, "{}*", ptr),
             TypesKind::Pointer => write!(f, "ptr"),
+            TypesKind::Bool => write!(f, "bool"),
         }
     }
 }
@@ -635,6 +668,12 @@ pub struct Expression<'a> {
 }
 
 #[derive(Debug)]
+pub struct CondBlock<'a> {
+    pub condition: Expression<'a>,
+    pub body: Vec<AST<'a>>
+}
+
+#[derive(Debug)]
 pub enum AST<'a> {
     Expression { expr: Expression<'a > },
     FunctionDef {
@@ -647,4 +686,11 @@ pub enum AST<'a> {
     VariableDef { name: & 'a Token, value: Option<Expression<'a>>, typ: Option<Types<'a>> },
     VariableReassign { name: & 'a Token, value: Expression<'a> },
     Return(Option<Expression<'a>>, &'a Token),
+    IfCondition {
+        first: CondBlock<'a>,
+        other: Option<CondBlock<'a>>,
+        elif: Vec<CondBlock<'a>>
+    },
+    CondLoop(CondBlock<'a>),
+    Break(&'a Token),
 }
