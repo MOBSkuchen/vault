@@ -341,31 +341,30 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
             }
 
             '/' => {
+                scanner.pop(); // Consume the first '/'
                 let peek = scanner.peek();
                 if peek.is_none() {
-                    scanner.pop();
                     return Ok(scanner.this_as_token(TokenType::Slash))
                 }
                 let peek_u = peek.unwrap();
                 if *peek_u == '*' {
                     // Multi-line comment
-                    scanner.pop();
+                    scanner.pop(); // Consume the '*'
                     while let Some(c) = scanner.pop() {
                         if *c == '*' && scanner.peek().is_some_and(|t| *t == '/') {
-                            scanner.pop(); // Consume the closing '#'
-                            break;
+                            scanner.pop(); // Consume the closing '/'
+                            break; // Exit the comment loop
                         }
                     }
                 } else if *peek_u == '/' {
-                    scanner.pop();
+                    scanner.pop(); // Consume the second '/'
                     // Single-line comment
                     while let Some(c) = scanner.pop() {
                         if *c == '\n' {
-                            break;
+                            break; // Exit the comment loop
                         }
                     }
                 } else {
-                    scanner.pop();
                     return Ok(scanner.this_as_token(TokenType::Slash))
                 }
             }
