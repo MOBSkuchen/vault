@@ -1,12 +1,16 @@
-use std::fmt::{write, Display, Formatter};
+use std::fmt::{Display, Formatter};
 use clap::{Arg, ValueHint};
+use clap_builder::builder::TypedValueParser;
+use clap_builder::Command;
 use inkwell::context::Context;
 use inkwell::targets::{TargetMachine, TargetTriple};
+use lld_rx::LldFlavor;
 use crate::codegen::Codegen;
 use crate::comp_errors::CodeResult;
 use crate::compiler::Compiler;
 use crate::filemanager::FileManager;
 use crate::lexer::tokenize;
+use crate::linker::{lld_link, ProdType};
 use crate::parser::Parser;
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
@@ -20,6 +24,7 @@ mod lexer;
 mod comp_errors;
 mod filemanager;
 mod codeviz;
+mod linker;
 
 enum OptLevel {
     Null = 0,
@@ -39,53 +44,103 @@ impl Display for OptLevel {
     }
 }
 
-enum OutputType {
+enum CompOutputType {
     Object,
     Asm,
     IR,
     BC
 }
 
-impl OutputType {
+impl CompOutputType {
     pub fn to_f_ext(&self) -> String {
         match self {
-            OutputType::Object => "o",
-            OutputType::Asm => "asm",
-            OutputType::IR => "ir",
-            OutputType::BC => "bc"
+            CompOutputType::Object => "o",
+            CompOutputType::Asm => "asm",
+            CompOutputType::IR => "ir",
+            CompOutputType::BC => "bc"
         }.to_string()
     }
 }
 
-impl Display for OutputType {
+impl Display for CompOutputType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", match self {
-            OutputType::Object => "object",
-            OutputType::Asm => "asm",
-            OutputType::IR => "ir",
-            &OutputType::BC => "bc"
+            CompOutputType::Object => "object",
+            CompOutputType::Asm => "asm",
+            CompOutputType::IR => "ir",
+            &CompOutputType::BC => "bc"
         })
     }
 }
 
-macro_rules! sref {
-    ($s:expr) => {
-        {let s = $s.to_string();
-        &s}
-    };
-}
-
-impl From<Option<&String>> for OutputType {
+impl From<Option<&String>> for CompOutputType {
     fn from(value: Option<&String>) -> Self {
         match value {
-            None => {OutputType::Object}
+            None => { CompOutputType::Object}
             Some(s) => {
                 let s = s.to_lowercase();
-                if s == "object" || s == "o" || s == "obj" {OutputType::Object}
-                else if s == "asm" || s == "assembly" {OutputType::Asm}
-                else if s == "ir" || s == "ll" {OutputType::IR}
-                else if s == "bc" || s == "bitcode" {OutputType::BC}
-                else {println!("unrecognized output-type `{s}`, defaulting to object"); OutputType::Object}
+                if s == "object" || s == "o" || s == "obj" { CompOutputType::Object}
+                else if s == "asm" || s == "assembly" { CompOutputType::Asm}
+                else if s == "ir" || s == "ll" { CompOutputType::IR}
+                else if s == "bc" || s == "bitcode" { CompOutputType::BC}
+                else {println!("unrecognized output-type `{s}`, defaulting to object"); CompOutputType::Object}
+            }
+        }
+    }
+}
+
+enum LinkOutputType {
+    Coff,
+    Elf,
+    Wasm,
+    MachO,
+}
+
+impl Into<LldFlavor> for LinkOutputType {
+    fn into(self) -> LldFlavor {
+        match self {
+            LinkOutputType::Coff => LldFlavor::Coff,
+            LinkOutputType::Elf => LldFlavor::Elf,
+            LinkOutputType::Wasm => LldFlavor::Wasm,
+            LinkOutputType::MachO => LldFlavor::MachO
+        }
+    }
+}
+
+impl LinkOutputType {
+    pub fn to_f_ext(&self, lib: bool) -> String {
+        match self {
+            LinkOutputType::Coff => { if lib { ".dll" } else { ".exe" } },
+            LinkOutputType::Elf => "",
+            LinkOutputType::Wasm => ".wasm",
+            LinkOutputType::MachO => ""
+        }.to_string()
+    }
+}
+
+impl Display for LinkOutputType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            LinkOutputType::Coff => "COFF",
+            LinkOutputType::Elf => "Elf",
+            LinkOutputType::Wasm => "Wasm",
+            LinkOutputType::MachO => "MachO"
+        })
+    }
+}
+
+impl From<Option<&String>> for LinkOutputType {
+    fn from(value: Option<&String>) -> Self {
+        match value {
+            // TODO: This expects to run on windows
+            None => { LinkOutputType::Coff}
+            Some(s) => {
+                let s = s.to_lowercase();
+                if s == "coff" || s == "exe" || s == "dll" || s == "win" { LinkOutputType::Coff}
+                else if s == "elf" || s == "linux" { LinkOutputType::Elf}
+                else if s == "wasm" || s == "web" { LinkOutputType::Wasm}
+                else if s == "macho" || s == "mac" { LinkOutputType::MachO}
+                else {println!("unrecognized output-type `{s}`, defaulting to object"); LinkOutputType::Coff}
             }
         }
     }
@@ -112,7 +167,16 @@ struct CompileJobData {
     target_triple: TargetTriple,
     optimization: OptLevel,
     module_id: String,
-    output_type: OutputType
+    output_type: CompOutputType
+}
+
+struct LinkJobData {
+    output: String,
+    output_type: LinkOutputType,
+    lib: bool,
+    libs: Vec<String>,
+    stdlib: bool,
+    entry: String,
 }
 
 impl Display for CompileJobData {
@@ -143,10 +207,10 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     codegen.optimize(&module, &compile_job_data.optimization);
     module.print_to_stderr();
     let file = match compile_job_data.output_type {
-        OutputType::Object => codegen.gen_obj(&module, compile_job_data.output),
-        OutputType::Asm => codegen.gen_asm(&module, compile_job_data.output),
-        OutputType::IR => codegen.gen_ir(&module, compile_job_data.output),
-        OutputType::BC => codegen.gen_bc(&module, compile_job_data.output)
+        CompOutputType::Object => codegen.gen_obj(&module, compile_job_data.output),
+        CompOutputType::Asm => codegen.gen_asm(&module, compile_job_data.output),
+        CompOutputType::IR => codegen.gen_ir(&module, compile_job_data.output),
+        CompOutputType::BC => codegen.gen_bc(&module, compile_job_data.output)
     };
     println!("Finished writing to `{file}`!");
     Ok(())
@@ -171,6 +235,44 @@ fn compile(filepath: String, compile_job_data: CompileJobData) -> bool {
     false
 }
 
+fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
+    let file_manager_r = FileManager::new_from(filepath);
+    if let Err(item) = file_manager_r {
+        item.output();
+        return true;
+    }
+
+    let file_manager = file_manager_r.unwrap();
+    
+    let tmp_file = format!("tmp_{}.o", link_job_data.output);
+    
+    let compile_job_data = CompileJobData {
+        output: tmp_file.clone(),
+        target_triple: TargetMachine::get_default_triple(),
+        optimization: OptLevel::Full,
+        module_id: "main".to_string(),
+        output_type: CompOutputType::Object
+    };
+
+    let x = compile_job(&file_manager, compile_job_data);
+    if let Err(item) = x {
+        item.visualize_error(&file_manager);
+        println!("\nAn error has occurred during compilation, terminating compilation.");
+        return false
+    }
+    
+    let mut libs = link_job_data.libs;
+    if link_job_data.stdlib {
+        libs.push("sila-stdlib-win.a".to_string())
+    }
+    
+    lld_link(link_job_data.output_type.into(), 
+             vec![tmp_file], link_job_data.output, link_job_data.lib, libs,
+             if link_job_data.lib { None } else { Some(link_job_data.entry) }, ProdType::Console);
+
+    false
+}
+
 fn main() {
     let tt = TargetMachine::get_default_triple();
     let tt = tt.as_str().to_str().unwrap();
@@ -191,67 +293,168 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
 ")
         .color(clap_builder::ColorChoice::Never)
         .disable_version_flag(true)
-        .arg(Arg::new("compile")
-            .index(1)
-            .help("Compile a file")
-            .value_hint(ValueHint::AnyPath)
-            .value_name("FILE")
-            .action(clap::ArgAction::Set))
-        .arg(Arg::new("out-type")
-            .long("output-type")
-            .alias("ot")
-            .help("Set the output type instead of inferring it")
-            .value_name("TYPE")
-            .action(clap::ArgAction::Set)
-            .requires("compile"))
-        .arg(Arg::new("optimization")
-            .long("optimization")
-            .short('O')
-            .help("Set optimization level 0-3")
-            .value_name("LEVEL")
-            .action(clap::ArgAction::Set)
-            .requires("compile"))
-        .arg(Arg::new("module-id")
-            .long("module-id")
-            .help("LLVM module id")
-            .value_name("ID")
-            .action(clap::ArgAction::Set)
-            .requires("compile"))
-        .arg(Arg::new("target")
-            .long("target")
-            .short('t')
-            .help(format!("Target triple; defaults to {tt} (for you)"))
-            .value_name("TRIPLE")
-            .action(clap::ArgAction::Set)
-            .requires("compile"))
-        .arg(Arg::new("output")
-            .long("output")
-            .short('o')
-            .help("Output file path")
-            .requires("compile")
-            .value_hint(ValueHint::AnyPath)
-            .value_name("FILE")
-            .action(clap::ArgAction::Set)
-            .requires("compile"))
-        .arg(Arg::new("version")
-            .short('v')
-            .long("version")
-            .help("Print version")
-            .action(clap::ArgAction::Version))
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("compile")
+                .about("Compile a file")
+                .arg(
+                    Arg::new("file")
+                        .help("File to compile")
+                        .value_hint(ValueHint::AnyPath)
+                        .value_name("FILE")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("comp-out-type")
+                        .long("comp-output-type")
+                        .alias("cot")
+                        .help("Set the output type instead of inferring it [FOR COMPILING]")
+                        .value_name("TYPE")
+                        .required(false),
+                )
+                .arg(
+                    Arg::new("optimization")
+                        .long("optimization")
+                        .short('O')
+                        .help("Set optimization level 0-3")
+                        .value_name("LEVEL"),
+                )
+                .arg(
+                    Arg::new("module-id")
+                        .long("module-id")
+                        .help("LLVM module id")
+                        .value_name("ID"),
+                )
+                .arg(
+                    Arg::new("target")
+                        .long("target")
+                        .short('t')
+                        .help(format!("Target triple; defaults to {tt} (for you)"))
+                        .value_name("TRIPLE"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .short('o')
+                        .help("Output file path")
+                        .value_hint(ValueHint::AnyPath)
+                        .value_name("FILE"),
+                )
+        )
+        .subcommand(
+            Command::new("build")
+                .about("Build a file")
+                .arg(
+                    Arg::new("file")
+                        .help("File to build")
+                        .value_hint(ValueHint::AnyPath)
+                        .value_name("FILE")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("no-standard")
+                        .long("no-standard-lib")
+                        .help("Do not link in standard library")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("link")
+                        .help("Link in libraries")
+                        .value_delimiter(',')
+                        .value_hint(ValueHint::AnyPath)
+                        .value_name("LIBS"),
+                )
+                .arg(
+                    Arg::new("entry")
+                        .long("entry-symbol")
+                        .help("Set entry for linking")
+                        .value_name("SYMBOL"),
+                )
+                .arg(
+                    Arg::new("library")
+                        .long("dst-lib")
+                        .help("Set linking output type to library")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("link-out-type")
+                        .long("link-output-type")
+                        .alias("lot")
+                        .help("Set the output type instead of inferring it [FOR LINKING]")
+                        .value_name("TYPE"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .short('o')
+                        .help("Output file path")
+                        .value_hint(ValueHint::AnyPath)
+                        .value_name("FILE"),
+                )
+        )
+        .arg(
+            Arg::new("version")
+                .short('v')
+                .long("version")
+                .help("Print version")
+                .action(clap::ArgAction::Version),
+        )
         .get_matches();
 
-    if let Some(item) = matches.get_one::<String>("compile") {
-        let mut output = matches.get_one::<&str>("output").unwrap_or(&"output").to_string();
-        let output_type: OutputType = matches.get_one::<String>("out-type").into();
-        if !matches.contains_id("output") {output = format!("{output}.{}", output_type.to_f_ext())}
-        let module_id = matches.get_one::<&str>("module-id").unwrap_or(&"main").to_string();
-        let optimization: OptLevel = matches.get_one::<String>("optimization").into();
-        let target_triple = 
-            matches.get_one::<String>("target").map(|t| TargetTriple::create(t))
-                .or_else(|| {Some(TargetMachine::get_default_triple())}).unwrap();
-        
-        let data = CompileJobData {output, target_triple, optimization, module_id, output_type};
-        
-        compile(item.to_owned(), data);
+    match matches.subcommand() {
+        Some(("compile", sub)) => {
+            let item = sub.get_one::<String>("file").unwrap();
+            let mut output = sub.get_one::<&str>("output").unwrap_or(&"output").to_string();
+            let output_type: CompOutputType = sub.get_one::<String>("comp-out-type").into();
+            if !sub.contains_id("output") {
+                output = format!("{output}.{}", output_type.to_f_ext());
+            }
+            let module_id = sub.get_one::<&str>("module-id").unwrap_or(&"main").to_string();
+            let optimization: OptLevel = sub.get_one::<String>("optimization").into();
+            let target_triple = sub
+                .get_one::<String>("target")
+                .map(|t| TargetTriple::create(t))
+                .or_else(|| Some(TargetMachine::get_default_triple()))
+                .unwrap();
+
+            let data = CompileJobData {
+                output,
+                target_triple,
+                optimization,
+                module_id,
+                output_type,
+            };
+
+            compile(item.to_owned(), data);
+        }
+        Some(("build", sub)) => {
+            let item = sub.get_one::<String>("file").unwrap();
+            let lib = sub.get_flag("library");
+            let no_std = sub.get_flag("no-standard");
+            let mut output = sub.get_one::<&str>("output").unwrap_or(&"output").to_string();
+            let output_type: LinkOutputType = sub.get_one::<String>("link-out-type").into();
+            if !sub.contains_id("output") {
+                output = format!("{output}{}", output_type.to_f_ext(lib));
+            }
+            let entry = sub.get_one::<&str>("entry").unwrap_or(&"main").to_string();
+            let libs: Vec<String> = if let Some(lbs) = sub.get_many("link") {
+                lbs.map(|s: &String| s.to_string()).collect()
+            } else {
+                vec![]
+            };
+
+            let data = LinkJobData {
+                output,
+                output_type,
+                lib,
+                stdlib: !no_std,
+                libs,
+                entry,
+            };
+
+            compile_and_link(item.to_owned(), data);
+        }
+        _ => unreachable!(),
     }
 }
