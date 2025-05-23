@@ -470,6 +470,9 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "u8" => TokenType::U8,
                     "void" => TokenType::Void,
                     "ptr" => TokenType::Ptr,
+                    "if" => TokenType::If,
+                    "elif" => TokenType::Elif,
+                    "else" => TokenType::Else,
                     _ => TokenType::Identifier,
                 };
                 return Ok(Some(Token {

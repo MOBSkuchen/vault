@@ -233,18 +233,39 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_function_call(&self, pointer: &mut usize) -> CodeResult<Expression> {
-        let name = self.previous(pointer).unwrap();
+    fn parse_function_call<'b>(&'b self, pointer: &mut usize, name: &'b Token) -> CodeResult<Expression<'b>> {
+        // We've just seen the identifier; next must be '('.
         self.consume(pointer, TokenType::LParen, None)?;
-        let mut arguments = vec![];
-        while let Some(_tok) = self.peek(pointer) {
-            arguments.push(self.parse_expression(pointer)?);
-            if self.match_token(pointer, TokenType::RParen)? {
+        let mut arguments = Vec::new();
+
+        // Parse zero or more arguments separated by commas.
+        if !self.check(pointer, TokenType::RParen)? {
+            loop {
+                let expr = self.parse_expression(pointer)?;
+                arguments.push(expr);
+                // If next is comma, consume and continue; else break.
+                if self.match_token(pointer, TokenType::Comma)? {
+                    continue;
+                }
                 break;
             }
-            self.consume(pointer, TokenType::Comma, Some("Add a comma".to_string()))?;
         }
-        Ok((ExpressionKind::FunctionCall {name, arguments}).into_expression(name.code_position.merge(self.tokens[*pointer - 1].code_position)))
+
+        // Consume the closing ')'
+        self.consume(pointer, TokenType::RParen, Some("Expected ')' after arguments".to_string()))?;
+
+        let end_pos = self.previous(pointer).unwrap().code_position;
+        let start_pos = name.code_position;
+        let pos = start_pos.merge(end_pos);
+        Ok((ExpressionKind::FunctionCall { name, arguments }).into_expression(pos))
+    }
+
+    fn check(&self, pointer: &usize, typ: TokenType) -> CodeResult<bool> {
+        if let Some(tok) = self.peek(pointer) {
+            Ok(tok.token_type == typ)
+        } else {
+            Err(CodeError::missing_token_error(self.previous(pointer).unwrap()))
+        }
     }
 
     fn parse_return(&self, pointer: &mut usize) -> CodeResult<AST> {
@@ -283,7 +304,7 @@ impl<'a> Parser<'a> {
             match token.token_type {
                 TokenType::Identifier => {
                     if self.match_next_token(pointer, TokenType::LParen)? {
-                        Ok(AST::Expression { expr: self.parse_function_call(pointer)? })
+                        Ok(AST::Expression { expr: self.parse_function_call(pointer, token)? })
                     } else if self.match_next_token(pointer, TokenType::Equals)? {
                         self.advance(pointer);
                         Ok(AST::VariableReassign {name: token, value: self.parse_expression(pointer)?})
@@ -370,7 +391,7 @@ impl<'a> Parser<'a> {
         };
 
         let other = if self.match_token(pointer, TokenType::Else)? {
-            Some(CondBlock {condition: self.parse_expression(pointer)?, body: self.parse_block(pointer)?})
+            Some(self.parse_block(pointer)?)
         } else { None };
         
         Ok(AST::IfCondition {first, other, elif})
@@ -458,7 +479,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&self, pointer: &mut usize) -> CodeResult<Expression> {
-        if let Some(token) = self.advance(pointer) {
+        let token = self.advance(pointer)
+            .ok_or_else(|| CodeError::missing_token_error(self.previous(pointer).unwrap()))?;
             match token.token_type {
                 TokenType::Ref => {
                     Ok(Expression {expression: ExpressionKind::Reference { 
@@ -470,21 +492,31 @@ impl<'a> Parser<'a> {
                         var: self.consume(pointer, TokenType::Identifier, Some("`*` is a deref-token, which must be followed by a variable to a pointer".to_string()))? }
                         , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
                 }
-                TokenType::NumberInt => Ok(Expression { expression: ExpressionKind::IntNumber { value: token.content.parse().unwrap(), token }, code_position: token.code_position }),
-                TokenType::NumberFloat => Ok(Expression { expression: ExpressionKind::FloatNumber { value: token.content.parse().unwrap(), token }, code_position: token.code_position }),
                 TokenType::Identifier => {
-                    if self.match_next_token(pointer, TokenType::LParen)? {
-                        self.parse_function_call(pointer)
-                    } else {
-                        Ok(Expression {expression: ExpressionKind::Identifier(token), code_position: token.code_position})
+                    let name_tok = token;
+                    // if next token is '(', it's a call; do not consume here
+                    if let Some(next) = self.peek(pointer) {
+                        if next.token_type == TokenType::LParen {
+                            return self.parse_function_call(pointer, name_tok);
+                        }
                     }
+                    // otherwise simple identifier
+                    Ok(Expression { expression: ExpressionKind::Identifier(name_tok), code_position: name_tok.code_position })
                 }
-                TokenType::String => Ok(Expression {expression: ExpressionKind::String(token), code_position: token.code_position}),
+                TokenType::NumberInt => {
+                    let val = token.content.parse().unwrap();
+                    Ok((ExpressionKind::IntNumber { value: val, token }).into_expression(token.code_position))
+                }
+                TokenType::NumberFloat => {
+                    let val = token.content.parse().unwrap();
+                    Ok((ExpressionKind::FloatNumber { value: val, token }).into_expression(token.code_position))
+                }
                 TokenType::LParen => {
                     let expr = self.parse_expression(pointer)?;
                     self.consume(pointer, TokenType::RParen, None)?;
                     Ok(expr)
                 }
+                TokenType::String => Ok(Expression {expression: ExpressionKind::String(token), code_position: token.code_position}),
                 _ => Err(CodeError::new_unexpected_token_error(
                     self.previous(pointer).unwrap(),
                     TokenType::Expression,
@@ -494,12 +526,7 @@ impl<'a> Parser<'a> {
                     ),
                 )),
             }
-        } else {
-            Err(CodeError::missing_token_error(
-                self.previous(pointer).unwrap(),
-            ))
         }
-    }
 
     fn parse_type(&self, pointer: &mut usize) -> CodeResult<Types> {
         let mut kind =
@@ -635,7 +662,7 @@ impl<'a> Types<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExpressionKind<'a> {
     IntNumber {
         value: u64,
@@ -661,19 +688,19 @@ impl<'a> ExpressionKind<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expression<'a> {
     pub expression: ExpressionKind<'a>,
     pub code_position: CodePosition
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CondBlock<'a> {
     pub condition: Expression<'a>,
     pub body: Vec<AST<'a>>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AST<'a> {
     Expression { expr: Expression<'a > },
     FunctionDef {
@@ -688,7 +715,7 @@ pub enum AST<'a> {
     Return(Option<Expression<'a>>, &'a Token),
     IfCondition {
         first: CondBlock<'a>,
-        other: Option<CondBlock<'a>>,
+        other: Option<Vec<AST<'a>>>,
         elif: Vec<CondBlock<'a>>
     },
     CondLoop(CondBlock<'a>),

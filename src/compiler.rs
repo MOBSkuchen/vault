@@ -9,7 +9,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, FloatType, FunctionType, 
 use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::comp_errors::{CodeError, CodeResult};
 use crate::lexer::Token;
-use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
+use crate::parser::{BinaryOp, CondBlock, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
 
 enum PrimitiveErrors {
     TypeVoidUnallowed
@@ -442,7 +442,7 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    fn visit_statement(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace, after_block: Option<BasicBlock>) -> CodeResult<bool> {
+    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>) -> CodeResult<bool> {
         let mut inside_loop = after_block.is_some();
         
         match statement {
@@ -506,13 +506,10 @@ impl<'ctx> Compiler<'ctx> {
                 
                 {
                     let (cond_value, typ) = self.visit_expr(function, global_scope, cond.condition, None, true)?;
-                    // let cond_value = cond_value.as_basic_value_enum().into_int_value();
                     if typ != TypesKind::Bool {
                         panic!("Must be a bool")
                     }
                     let condition = cond_value.as_basic_value_enum().into_int_value();
-                    println!("{}", condition.get_type());
-                    // let condition = self.builder.build_int_compare(IntPredicate::NE, cond_value, self.null(), "is_nonzero").expect("Failed cond comp");
                     self.builder.build_conditional_branch(condition, body_block, after_block)
                         .expect("Failed to make conditional branch");
                 }
@@ -531,7 +528,106 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.position_at_end(after_block);
                 return Ok(inside_loop);
             }
-            AST::IfCondition { .. } => todo!("if cond"),
+            AST::IfCondition { first, other, elif } => {
+                let after_block = function.new_block("if_after", false);
+
+                // Generate all blocks
+                let mut cond_blocks = vec![(&first, function.new_block("if_cond0", false))];
+                let mut body_blocks = vec![function.new_block("if_body0", false)];
+
+                for (i, elif_block) in elif.iter().enumerate() {
+                    cond_blocks.push((elif_block, function.new_block(&format!("elif_cond{i}"), false)));
+                    body_blocks.push(function.new_block(&format!("elif_body{i}"), false));
+                }
+
+                let else_bb = if other.as_ref().map_or(false, |v| !v.is_empty()) {
+                    Some(function.new_block("else_body", false))
+                } else {
+                    None
+                };
+
+                // Jump to first condition
+                self.builder
+                    .build_unconditional_branch(cond_blocks[0].1)
+                    .expect("Failed to do jump (IF)");
+
+                // Generate conditional checks
+                for i in 0..cond_blocks.len() {
+                    let (cond_block, cond_bb) = cond_blocks[i];
+                    let body_bb = body_blocks[i];
+
+                    self.builder.position_at_end(cond_bb);
+
+                    let cond_val = self.visit_expr(
+                        function,
+                        global_scope,
+                        cond_block.condition.clone(),
+                        None,
+                        true,
+                    )?.0.as_any_value_enum().into_int_value();
+
+                    let zero = cond_val.get_type().const_zero();
+                    let cond = self.builder
+                        .build_int_compare(IntPredicate::NE, cond_val, zero, "if_cond")
+                        .expect("Failed to build int-cmp");
+
+                    let next_cond_bb = cond_blocks.get(i + 1).map(|(_, bb)| *bb)
+                        .or(else_bb)
+                        .unwrap_or(after_block);
+
+                    self.builder
+                        .build_conditional_branch(cond, body_bb, next_cond_bb)
+                        .expect("Failed to build jump (IF2)");
+                }
+
+                // Generate each body
+                for (i, cond_block) in cond_blocks.iter().enumerate() {
+                    let body_bb = body_blocks[i];
+                    self.builder.position_at_end(body_bb);
+
+                    for stmt in &cond_block.0.body {
+                        let continue_block = self.visit_statement(
+                            function,
+                            stmt.clone(),
+                            global_scope,
+                            Some(after_block),
+                        )?;
+                        if !continue_block {
+                            break;
+                        }
+                    }
+
+                    self.builder
+                        .build_unconditional_branch(after_block)
+                        .expect("Failed to build jump (IF3)");
+                }
+
+                // Handle `else` block (now Option<Vec<AST>>)
+                if let Some(else_stmts) = other {
+                    if let Some(else_bb) = else_bb {
+                        self.builder.position_at_end(else_bb);
+
+                        for stmt in else_stmts {
+                            let continue_block = self.visit_statement(
+                                function,
+                                stmt.clone(),
+                                global_scope,
+                                Some(after_block),
+                            )?;
+                            if !continue_block {
+                                break;
+                            }
+                        }
+
+                        self.builder
+                            .build_unconditional_branch(after_block)
+                            .expect("Failed to build jump (IF4)");
+                    }
+                }
+
+                // Final after block
+                self.builder.position_at_end(after_block);
+            }
             AST::Break(tok) => {
                 if let Some(after) = after_block {
                     self.builder.position_at_end(after);
@@ -589,5 +685,3 @@ impl<'ctx> Compiler<'ctx> {
         Ok(module)
     }
 }
-
-// TODO: FIX PROBLEM WITH Reassignment and casting!!!!!
