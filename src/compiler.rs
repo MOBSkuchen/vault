@@ -5,7 +5,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, FloatType, FunctionType, IntType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType};
 use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
@@ -76,7 +76,8 @@ impl<'ctx> Function<'ctx> {
 
 pub struct Namespace<'ns> {
     pub definitions: HashMap<String, (TypesKind, PointerValue<'ns>)>,
-    pub functions: HashMap<String, (FunctionValue<'ns>, bool)>
+    pub functions: HashMap<String, (FunctionValue<'ns>, bool)>,
+    pub struct_order: HashMap<String, Vec<(String, TypesKind)>>
 }
 
 // Check local and global scope
@@ -89,7 +90,7 @@ fn check_ls_gs_func<'a>(name: &str, ls: &'a Namespace<'a>, gs: &'a Namespace<'a>
 
 impl<'ns> Namespace<'ns> {
     fn new() -> Self {
-        Self { definitions: HashMap::new(), functions: HashMap::new() }
+        Self { definitions: HashMap::new(), functions: HashMap::new(), struct_order: HashMap::new() }
     }
 }
 
@@ -453,7 +454,7 @@ impl<'ctx> Compiler<'ctx> {
         // Returns: inside_loop, returns
         
         match statement {
-            AST::FunctionDef { .. } => panic!("Function definition is not allowed here (YET)"),
+            AST::FunctionDef { .. } | AST::Struct { .. } => panic!("Function definition is not allowed here (YET)"),
             AST::VariableDef { name, value, typ } => {
                 let val = if let Some(value) = value {
                     let cpos = &value.code_position.clone();
@@ -670,6 +671,7 @@ impl<'ctx> Compiler<'ctx> {
             AST::CondLoop(c) => c.condition.code_position,
             AST::Break(tok) => tok.code_position,
             AST::Continue(tok) => tok.code_position,
+            AST::Struct { name, .. } => name.code_position,
         }
     }
 
@@ -723,6 +725,16 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
     
+    fn visit_struct<'a>(&self, name: &'a Token, members: Vec<(&'a Token, Types<'a>)>, global_scope: &mut Namespace<'ctx>) -> CodeResult<()> {
+        let real_membs = members.iter()
+            .map(|x| {self.convert_type_normal(&x.1.kind).map(|x1| x1.as_basic_type_enum())
+                .map_err(|_| {CodeError::void_type(x.1.token)})}).collect::<CodeResult<Vec<BasicTypeEnum>>>()?;
+        let asoc = members.iter().map(|x2| {(x2.0.content.clone(), x2.1.kind.clone())}).collect();
+        global_scope.struct_order.insert(name.content.to_owned(), asoc);
+        self.context.struct_type(real_membs.as_slice(), true);
+        Ok(())
+    }
+    
     fn warning(&self, code_warning: CodeWarning) {
         print_code_warn(code_warning, self.file_manager);
     }
@@ -733,6 +745,9 @@ impl<'ctx> Compiler<'ctx> {
             match branch {
                 AST::FunctionDef { ret, fmode, name, params, body } => {
                     self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body)?;
+                }
+                AST::Struct { name, members } => {
+                    self.visit_struct(name, members, &mut global_scope)?;
                 }
                 _ => unreachable!()
             }

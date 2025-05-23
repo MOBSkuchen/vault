@@ -63,6 +63,7 @@ pub enum TokenType {
     Break,
     Continue,
     Bool,
+    Struct,
 
     // Virtual types
     Expression,
@@ -128,6 +129,7 @@ impl TokenType {
             TokenType::U8 => "u8",
             TokenType::U32 => "u32",
             TokenType::U64 => "u64",
+            TokenType::Struct => "struct",
         })
             .to_string()
     }
@@ -461,7 +463,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "break" => TokenType::Break,
                     "while" => TokenType::While,
                     "continue" => TokenType::Continue,
-                    "struct" => TokenType::Continue,
+                    "struct" => TokenType::Struct,
                     "i32" => TokenType::I32,
                     "f32" => TokenType::F32,
                     "f64" => TokenType::F64,

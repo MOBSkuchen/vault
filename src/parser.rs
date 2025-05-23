@@ -138,6 +138,12 @@ impl<'a> Parser<'a> {
                     let func = self.parse_function(pointer)?;
                     statements.push(func);
                 }
+                
+                TokenType::Struct => {
+                    self.advance(pointer);
+                    let func = self.parse_struct(pointer)?;
+                    statements.push(func);
+                }
 
                 // // Parse import statements
                 // TokenType::Import => {
@@ -152,6 +158,25 @@ impl<'a> Parser<'a> {
         }
 
         Ok(statements)
+    }
+    
+    fn parse_struct(&self, pointer: &mut usize) -> CodeResult<AST> {
+        let name = self.consume(pointer, TokenType::Identifier, None)?;
+        self.consume(pointer, TokenType::LBrace, None)?;
+
+        let mut members = vec![];
+        
+        loop {
+            let mem_name = self.consume(pointer, TokenType::Identifier, None)?;
+            self.consume(pointer, TokenType::LBrace, None)?;
+            let mem_type = self.parse_type(pointer)?;
+            members.push((mem_name, mem_type));
+
+            if self.match_token(pointer, TokenType::RBrace)? { break }
+            self.consume(pointer, TokenType::Comma, Some("Struct definitions must end with `}` or continue using `,`".to_string()))?;
+        };
+        
+        Ok(AST::Struct {name, members})
     }
 
     // // Parse import statement (assuming a simple import structure)
@@ -724,4 +749,8 @@ pub enum AST<'a> {
     CondLoop(CondBlock<'a>),
     Break(&'a Token),
     Continue(&'a Token),
+    Struct {
+        name: &'a Token,
+        members: Vec<(&'a Token, Types<'a>)>
+    }
 }
