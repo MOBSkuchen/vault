@@ -259,16 +259,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_call<'b>(&'b self, pointer: &mut usize, name: &'b Token) -> CodeResult<Expression<'b>> {
-        // We've just seen the identifier; next must be '('.
         self.consume(pointer, TokenType::LParen, None)?;
         let mut arguments = Vec::new();
 
-        // Parse zero or more arguments separated by commas.
         if !self.check(pointer, TokenType::RParen)? {
             loop {
                 let expr = self.parse_expression(pointer)?;
                 arguments.push(expr);
-                // If next is comma, consume and continue; else break.
                 if self.match_token(pointer, TokenType::Comma)? {
                     continue;
                 }
@@ -277,7 +274,7 @@ impl<'a> Parser<'a> {
         }
 
         // Consume the closing ')'
-        self.consume(pointer, TokenType::RParen, Some("Expected ')' after arguments".to_string()))?;
+        self.consume(pointer, TokenType::RParen, Some("Expected `)` after arguments".to_string()))?;
 
         let end_pos = self.previous(pointer).unwrap().code_position;
         let start_pos = name.code_position;
@@ -522,14 +519,31 @@ impl<'a> Parser<'a> {
                 }
                 TokenType::Identifier => {
                     let name_tok = token;
-                    // if next token is '(', it's a call; do not consume here
                     if let Some(next) = self.peek(pointer) {
                         if next.token_type == TokenType::LParen {
                             return self.parse_function_call(pointer, name_tok);
                         }
                     }
-                    // otherwise simple identifier
                     Ok(Expression { expression: ExpressionKind::Identifier(name_tok), code_position: name_tok.code_position })
+                }
+                TokenType::New => {
+                    let start = token.code_position;
+                    let name = self.consume(pointer, TokenType::Identifier, None)?;
+                    self.consume(pointer, TokenType::LParen, None)?;
+                    let mut arguments = Vec::new();
+                    if !self.check(pointer, TokenType::RParen)? {
+                        loop {
+                            let expr = self.parse_expression(pointer)?;
+                            arguments.push(expr);
+                            if self.match_token(pointer, TokenType::Comma)? {
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                    self.consume(pointer, TokenType::RParen, Some("Expected `)` after arguments".to_string()))?;
+
+                    Ok((ExpressionKind::New {name, arguments}).into_expression(start.merge(self.tokens[*pointer - 1].code_position)))
                 }
                 TokenType::NumberInt => {
                     let val = token.content.parse().unwrap();
@@ -707,7 +721,8 @@ pub enum ExpressionKind<'a> {
     CastExpr { expr: Box<Expression<'a>>, typ: Types<'a> },
     FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
     Reference { var: &'a Token },
-    Dereference { var: &'a Token }
+    Dereference { var: &'a Token },
+    New { name: & 'a Token, arguments: Vec<Expression<'a>> },
 }
 
 impl<'a> ExpressionKind<'a> {
@@ -752,5 +767,5 @@ pub enum AST<'a> {
     Struct {
         name: &'a Token,
         members: Vec<(&'a Token, Types<'a>)>
-    }
+    },
 }

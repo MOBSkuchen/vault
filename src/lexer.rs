@@ -64,6 +64,7 @@ pub enum TokenType {
     Continue,
     Bool,
     Struct,
+    New,
 
     // Virtual types
     Expression,
@@ -115,6 +116,7 @@ impl TokenType {
             TokenType::Else => "else",
             TokenType::Elif => "elif",
             TokenType::Let => "let",
+            TokenType::New => "new",
             TokenType::While => "while",
             TokenType::Break => "break",
             TokenType::Continue => "continue",
@@ -473,6 +475,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "u8" => TokenType::U8,
                     "void" => TokenType::Void,
                     "ptr" => TokenType::Ptr,
+                    "new" => TokenType::New,
                     "if" => TokenType::If,
                     "elif" => TokenType::Elif,
                     "else" => TokenType::Else,

@@ -6,7 +6,7 @@ use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType};
-use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
+use inkwell::values::{AsValueRef, BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::filemanager::FileManager;
@@ -64,13 +64,13 @@ pub fn hinted_float<'a>(hint: Option<&TypesKind>, ctx: &'a Context) -> (FloatTyp
 pub struct Function<'ctx> {
     compiler: &'ctx Compiler<'ctx>,
     function_value: FunctionValue<'ctx>,
-    ret: &'ctx TypesKind,
+    ret: TypesKind,
     function_scope: Namespace<'ctx>,
     name: String,
 }
 
 impl<'ctx> Function<'ctx> {
-    pub fn new(compiler: &'ctx Compiler<'ctx>, function_value: FunctionValue<'ctx>, ret: &'ctx TypesKind, name: String) -> Self {
+    pub fn new(compiler: &'ctx Compiler<'ctx>, function_value: FunctionValue<'ctx>, ret: TypesKind, name: String) -> Self {
         Self { compiler, function_value, ret, function_scope: Namespace::new(), name }
     }
 
@@ -454,11 +454,30 @@ impl<'ctx> Compiler<'ctx> {
                 let value = self.builder.build_load(real_deref_type.as_basic_type_enum(), ptr, "")
                     .expect("Load (deref) failed").as_basic_value_enum();
                 (Box::new(value), *deref_type.clone())
-            }
+            },
+            ExpressionKind::New { name, arguments } => {
+                let virtual_struct_type = TypesKind::Struct {name: name.content.clone() };
+                let struct_type = resolve_prim_res(self.convert_type_normal(&virtual_struct_type), name)?.as_basic_type_enum().into_struct_type();
+                let expected = global_scope.struct_order.get(&name.content).expect("Failed to get struct - which should not happen btw");
+                let params = arguments.into_iter().enumerate()
+                    .map(|(i, expr)| {
+                        let cpos = expr.code_position;
+                        let (e, t) = self.visit_expr(function, global_scope, expr, Some(&expected[i].1), true)?;
+                        if expected[i].1 != t {
+                            Err(CodeError::type_mismatch(&cpos, &t, &expected[i].1, vec![format!("The param nr. {i} must be of type `{}`", expected[i].1)]))
+                        } else {
+                            Ok((e, t))
+                        }
+                    })
+                    .collect::<CodeResult<Vec<(Box<dyn BasicValue>, TypesKind)>>>()?;
+
+                let struct_value = struct_type.const_named_struct(params.into_iter().map(|x| { x.0.as_basic_value_enum() }).collect::<Vec<BasicValueEnum>>().as_ref());
+                (Box::new(struct_value.as_basic_value_enum()), virtual_struct_type)
+            },
         })
     }
 
-    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> {
+    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
         let mut inside_loop = after_block.is_some();
         let mut returns = false;
         // Returns: inside_loop, returns
@@ -500,14 +519,14 @@ impl<'ctx> Compiler<'ctx> {
             AST::Return(value, ret_tok) => {
                 if let Some(expr) = value {
                     let cpos = &expr.code_position.clone();
-                    let (n_value, typ) = self.visit_expr(function, global_scope, expr, Some(function.ret), true)?;
-                    if typ != *function.ret {
-                        return Err(CodeError::type_mismatch(cpos, &typ, function.ret, vec![format!("This is because the function `{}` has the return-type `{}`", function.name, function.ret)]))
+                    let (n_value, typ) = self.visit_expr(function, global_scope, expr, Some(&function.ret), true)?;
+                    if typ != function.ret {
+                        return Err(CodeError::type_mismatch(cpos, &typ, &function.ret, vec![format!("This is because the function `{}` has the return-type `{}`", function.name, function.ret)]))
                     }
                     self.builder.build_return(Some(n_value.deref())).expect("Failed to return");
                 } else {
-                    if *function.ret != TypesKind::Void {
-                        return Err(CodeError::non_void_ret(ret_tok, &function.name, function.ret))
+                    if function.ret != TypesKind::Void {
+                        return Err(CodeError::non_void_ret(ret_tok, &function.name, &function.ret))
                     }
                     self.builder.build_return(None).expect("Failed to return NONE");
                 }
@@ -700,7 +719,7 @@ impl<'ctx> Compiler<'ctx> {
         }
         
         let function_value = module.add_function(&name.content, fn_type, Some(fmode.into()));
-        let mut function = Function::new(self, function_value, &return_type.kind, name.content.clone());
+        let mut function = Function::new(self, function_value, return_type.kind.clone(), name.content.clone());
 
         global_scope.functions.insert(name.content.clone(), (function_value, body.is_some()));
         global_scope.definitions.insert(name.content.clone(), (TypesKind::Function {ret: Box::from(return_type.kind.clone()), 
