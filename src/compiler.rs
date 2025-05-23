@@ -7,9 +7,11 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FloatType, FunctionType, IntType};
 use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
-use crate::comp_errors::{CodeError, CodeResult};
-use crate::lexer::Token;
-use crate::parser::{BinaryOp, CondBlock, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
+use crate::codeviz::print_code_warn;
+use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
+use crate::filemanager::FileManager;
+use crate::lexer::{CodePosition, Token};
+use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
 
 enum PrimitiveErrors {
     TypeVoidUnallowed
@@ -110,11 +112,12 @@ pub struct Compiler<'ctx> {
     context: &'ctx Context,
     builder: &'ctx Builder<'ctx>,
     module_name: String,
+    file_manager: &'ctx FileManager
 }
 
 impl<'ctx> Compiler<'ctx> {
-    pub fn new(context: &'ctx Context, builder: &'ctx Builder<'ctx>, module_name: String) -> Self {
-        Self { context, builder, module_name }
+    pub fn new(context: &'ctx Context, builder: &'ctx Builder<'ctx>, module_name: String, file_manager: &'ctx FileManager) -> Self {
+        Self { context, builder, module_name, file_manager }
     }
 
     fn convert_type_normal<'a>(&'a self, typ: &TypesKind) -> PrimRes<Box<dyn BasicType + 'a>> {
@@ -427,7 +430,9 @@ impl<'ctx> Compiler<'ctx> {
                 let deref_type = match &def.0 {
                     TypesKind::Ptr(ptr_t) => {ptr_t},
                     TypesKind::Pointer => &{ Box::new(TypesKind::Void) },
-                    _ => {todo!("Add error here; not a pointer")}
+                    _ => {
+                        return Err(CodeError::type_mismatch(&var.code_position, &def.0, &TypesKind::Pointer, vec!["Only pointers can be dereferenced, but this variable is not a pointer".to_string()]))
+                    }
                 };
 
                 let ptr_t = self.convert_type_normal(&def.0).map_err(|e| {CodeError::void_type(var)})?;
@@ -640,11 +645,24 @@ impl<'ctx> Compiler<'ctx> {
                     self.builder.position_at_end(after);
                     inside_loop = false;
                 } else {
-                    todo!("add error here")
+                    return Err(CodeError::break_outside_loop(&tok.code_position))
                 }
             },
         }
         Ok((inside_loop, returns))
+    }
+    
+    fn ast_to_codepos(ast: &AST) -> CodePosition {
+        match ast {
+            AST::Expression { expr } => expr.code_position,
+            AST::FunctionDef { name, .. } => name.code_position,
+            AST::VariableDef { name, .. } => name.code_position,
+            AST::VariableReassign { name, .. } => name.code_position,
+            AST::Return(_, tok) => tok.code_position,
+            AST::IfCondition { first, .. } => first.condition.code_position,
+            AST::CondLoop(c) => c.condition.code_position,
+            AST::Break(tok) => tok.code_position,
+        }
     }
 
     pub(crate) fn visit_function_def<'a>(&'a self, module: &Module<'a>, name: &Token, fmode: FunctionMode, 
@@ -679,17 +697,26 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_store(ptr, value).expect("Failed to store param");
                 function.function_scope.definitions.insert(param.0.content.clone(), (param.1.kind.clone(), ptr));
             }
-            for stmt in body {
-                (inside_loop, returns) = self.visit_statement(&mut function, stmt, global_scope, None)?;
-                
-                if returns {
-                    // TODO: Add warning for unreachable code
+            
+            let length = body.len();
+            let mut enumer = body.into_iter().enumerate();
+            let mut current = enumer.next().unwrap();
+
+            while current.0 <= length {
+                (inside_loop, returns) = self.visit_statement(&mut function, current.1, global_scope, None)?;
+                if returns && (current.0 + 1 < length) {
+                    self.warning(CodeWarning::dead_code(Self::ast_to_codepos(&enumer.next().unwrap().1), None));
                     break
                 }
+                if let Some(c) = enumer.next() { current = c; } else {break}
             }
         }
         
         Ok(())
+    }
+    
+    fn warning(&self, code_warning: CodeWarning) {
+        print_code_warn(code_warning, self.file_manager);
     }
 
     pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>) -> CodeResult<Module<'a>> {

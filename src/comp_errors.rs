@@ -55,6 +55,7 @@ pub enum CodeErrorType {
     Unable2Cast,
     Uncastable,
     ToplevelStatement,
+    BreakOutsideLoop,
 }
 
 #[derive(Debug)]
@@ -215,6 +216,17 @@ impl CodeError {
         )
     }
 
+    pub fn break_outside_loop(pos: &CodePosition) -> Self {
+        Self::new(
+            *pos,
+            CodeErrorType::BreakOutsideLoop,
+            "Break outside of loop".to_string(),
+            Some("Break here".to_string()),
+            "However, break can only be used inside of loops, e.g. while".to_string(),
+            vec![]
+        )
+    }
+
     pub fn non_void_ret(ret_tok: &Token, name: &String, ret: &TypesKind) -> Self {
         Self::new(
             ret_tok.code_position,
@@ -346,6 +358,21 @@ impl CodeWarning {
             CodeWarningType::UnnecessaryCode,
             "Unnecessary code".to_string(),
             "This code does not change the outcome".to_string(),
+            None,
+            if extra.is_some() {
+                vec![extra.unwrap()]
+            } else {
+                vec!["You should remove it".to_string()]
+            },
+        )
+    }
+
+    pub fn dead_code(position: CodePosition, extra: Option<String>) -> Self {
+        Self::new(
+            position,
+            CodeWarningType::DeadCode,
+            "Dead code".to_string(),
+            "This code is unreachable".to_string(),
             None,
             if extra.is_some() {
                 vec![extra.unwrap()]

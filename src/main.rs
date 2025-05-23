@@ -194,15 +194,13 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let tokens = tokenize(file_manager.get_content())?;
     println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
 
-    println!("{:#?}", tokens);
     let parser = Parser::new(tokens, file_manager);
     let ast = parser.parse(&mut 0)?;
-    println!("{:#?}", ast);
 
     let context = Context::create();
     let builder = context.create_builder();
     let module = context.create_module(&compile_job_data.module_id);
-    let compiler = Compiler::new(&context, &builder, compile_job_data.module_id);
+    let compiler = Compiler::new(&context, &builder, compile_job_data.module_id, file_manager);
 
     let module = compiler.comp_ast(module, ast)?;
     module.print_to_stderr();

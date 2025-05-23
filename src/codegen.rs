@@ -52,12 +52,12 @@ impl Codegen {
     }
 
     pub fn gen_obj(&self, module: &Module, path: String) -> String {
-        self.create_target_machine().write_to_file(module, FileType::Object, path.as_ref()).expect("TODO: panic message");
+        self.create_target_machine().write_to_file(module, FileType::Object, path.as_ref()).expect("Failed to write obj to file");
         path
     }
 
     pub fn gen_asm(&self, module: &Module, path: String) -> String {
-        self.create_target_machine().write_to_file(module, FileType::Assembly, path.as_ref()).expect("TODO: panic message");
+        self.create_target_machine().write_to_file(module, FileType::Assembly, path.as_ref()).expect("Failed to write assembly to file");
         path
     }
 
