@@ -56,6 +56,7 @@ pub enum CodeErrorType {
     Uncastable,
     ToplevelStatement,
     BreakOutsideLoop,
+    NonVoidNoReturn,
 }
 
 #[derive(Debug)]
@@ -234,6 +235,17 @@ impl CodeError {
             "Non void function must return a value".to_string(),
             Some("Return statement with no value".to_string()),
             format!("The function `{name}` should return the type `{ret}`, but here it does not return anything, which is only allowed for void functions"),
+            vec![]
+        )
+    }
+
+    pub fn non_void_no_ret_func(name: &Token, ret: &TypesKind) -> Self {
+        Self::new(
+            name.code_position,
+            CodeErrorType::NonVoidNoReturn,
+            "Non void function must return a value".to_string(),
+            Some("Function defined here".to_string()),
+            format!("The function `{name}` should return the type `{ret}`, but it has no return statement, which is only allowed for void functions"),
             vec![]
         )
     }

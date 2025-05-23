@@ -726,7 +726,7 @@ impl<'ctx> Compiler<'ctx> {
             params: params.iter().map(|x| {x.1.kind.clone()}).collect() }, unsafe { PointerValue::new(function_value.as_value_ref()) }));
         
         let mut inside_loop = false;
-        let mut returns;
+        let mut returns = false;
         
         if let Some(body) = body {
             let entry = function.new_block("entry", true);
@@ -749,6 +749,10 @@ impl<'ctx> Compiler<'ctx> {
                     break
                 }
                 if let Some(c) = enumer.next() { current = c; } else {break}
+            }
+            
+            if !returns && (return_type.kind != TypesKind::Void) {
+                return Err(CodeError::non_void_no_ret_func(name, &return_type.kind))
             }
         }
         
