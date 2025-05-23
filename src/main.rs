@@ -191,9 +191,10 @@ impl Display for CompileJobData {
 fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> CodeResult<()> {
     let tokens = tokenize(file_manager.get_content())?;
     println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
-
+    
     let parser = Parser::new(tokens, file_manager);
     let ast = parser.parse(&mut 0)?;
+    println!("{:#?}", ast);
 
     let context = Context::create();
     let builder = context.create_builder();

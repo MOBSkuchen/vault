@@ -168,7 +168,7 @@ impl<'a> Parser<'a> {
         
         loop {
             let mem_name = self.consume(pointer, TokenType::Identifier, None)?;
-            self.consume(pointer, TokenType::LBrace, None)?;
+            self.consume(pointer, TokenType::Colon, None)?;
             let mem_type = self.parse_type(pointer)?;
             members.push((mem_name, mem_type));
 
@@ -568,7 +568,7 @@ impl<'a> Parser<'a> {
             else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
             else if self.match_token(pointer, TokenType::Ptr)? { Ok(TypesKind::Pointer) }
             else if self.match_token(pointer, TokenType::Bool)? { Ok(TypesKind::Bool) }
-            else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer].content.clone() }) }
+            else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer - 1].content.clone() }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))})?;
 
         loop {
