@@ -442,8 +442,10 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>) -> CodeResult<bool> {
+    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>) -> CodeResult<(bool, bool)> {
         let mut inside_loop = after_block.is_some();
+        let mut returns = false;
+        // Returns: inside_loop, returns
         
         match statement {
             AST::FunctionDef { .. } => panic!("Function definition is not allowed here (YET)"),
@@ -492,6 +494,7 @@ impl<'ctx> Compiler<'ctx> {
                     }
                     self.builder.build_return(None).expect("Failed to return NONE");
                 }
+                returns = true;
             },
             AST::CondLoop(cond) => {
                 inside_loop = true;
@@ -516,8 +519,8 @@ impl<'ctx> Compiler<'ctx> {
 
                 self.builder.position_at_end(body_block);
                 for stmt in cond.body {
-                    let il = self.visit_statement(function, stmt, global_scope, Some(after_block))?;
-                    if !il {
+                    let (il, rets) = self.visit_statement(function, stmt, global_scope, Some(after_block))?;
+                    if !il || rets {
                         inside_loop = false;
                         break;
                     }
@@ -526,12 +529,11 @@ impl<'ctx> Compiler<'ctx> {
                     .expect("Failed to branch back to condition");
 
                 self.builder.position_at_end(after_block);
-                return Ok(inside_loop);
+                return Ok((inside_loop, false));
             }
             AST::IfCondition { first, other, elif } => {
                 let after_block = function.new_block("if_after", false);
 
-                // Generate all blocks
                 let mut cond_blocks = vec![(&first, function.new_block("if_cond0", false))];
                 let mut body_blocks = vec![function.new_block("if_body0", false)];
 
@@ -546,12 +548,10 @@ impl<'ctx> Compiler<'ctx> {
                     None
                 };
 
-                // Jump to first condition
                 self.builder
                     .build_unconditional_branch(cond_blocks[0].1)
                     .expect("Failed to do jump (IF)");
 
-                // Generate conditional checks
                 for i in 0..cond_blocks.len() {
                     let (cond_block, cond_bb) = cond_blocks[i];
                     let body_bb = body_blocks[i];
@@ -580,7 +580,6 @@ impl<'ctx> Compiler<'ctx> {
                         .expect("Failed to build jump (IF2)");
                 }
 
-                // Generate each body
                 for (i, cond_block) in cond_blocks.iter().enumerate() {
                     let body_bb = body_blocks[i];
                     self.builder.position_at_end(body_bb);
@@ -592,18 +591,20 @@ impl<'ctx> Compiler<'ctx> {
                             global_scope,
                             Some(after_block),
                         )?;
-                        if !continue_block {
+                        returns = continue_block.1;
+                        if !continue_block.0 || continue_block.1 {
                             break;
                         }
                     }
 
-                    self.builder
-                        .build_unconditional_branch(after_block)
-                        .expect("Failed to build jump (IF3)");
+                    if !returns {
+                        self.builder
+                            .build_unconditional_branch(after_block)
+                            .expect("Failed to build jump (IF4)");
+                    }
                 }
 
-                // Handle `else` block (now Option<Vec<AST>>)
-                if let Some(else_stmts) = other {
+                if let Some(ref else_stmts) = other {
                     if let Some(else_bb) = else_bb {
                         self.builder.position_at_end(else_bb);
 
@@ -614,19 +615,25 @@ impl<'ctx> Compiler<'ctx> {
                                 global_scope,
                                 Some(after_block),
                             )?;
-                            if !continue_block {
+                            returns = continue_block.1;
+                            if !continue_block.0 || continue_block.1 {
                                 break;
                             }
                         }
 
-                        self.builder
-                            .build_unconditional_branch(after_block)
-                            .expect("Failed to build jump (IF4)");
+                        if !returns {
+                            self.builder
+                                .build_unconditional_branch(after_block)
+                                .expect("Failed to build jump (IF4)");
+                        }
                     }
                 }
 
-                // Final after block
                 self.builder.position_at_end(after_block);
+                
+                if other.is_some() && returns {
+                    self.builder.build_unreachable().expect("Failed to make after unreachable");
+                }
             }
             AST::Break(tok) => {
                 if let Some(after) = after_block {
@@ -637,7 +644,7 @@ impl<'ctx> Compiler<'ctx> {
                 }
             },
         }
-        Ok(inside_loop)
+        Ok((inside_loop, returns))
     }
 
     pub(crate) fn visit_function_def<'a>(&'a self, module: &Module<'a>, name: &Token, fmode: FunctionMode, 
@@ -659,13 +666,26 @@ impl<'ctx> Compiler<'ctx> {
         global_scope.functions.insert(name.content.clone(), (function_value, body.is_some()));
         global_scope.definitions.insert(name.content.clone(), (TypesKind::Function {ret: Box::from(return_type.kind.clone()), 
             params: params.iter().map(|x| {x.1.kind.clone()}).collect() }, unsafe { PointerValue::new(function_value.as_value_ref()) }));
-
+        
         let mut inside_loop = false;
+        let mut returns;
         
         if let Some(body) = body {
             function.new_block("entry", true);
+            // Function params
+            for (i, param) in params.iter().enumerate() {
+                let value = function.function_value.get_nth_param(i as u32).unwrap();
+                let ptr = self.builder.build_alloca(value.get_type(), "").expect("Failed to build alloca");
+                self.builder.build_store(ptr, value).expect("Failed to store param");
+                function.function_scope.definitions.insert(param.0.content.clone(), (param.1.kind.clone(), ptr));
+            }
             for stmt in body {
-                inside_loop = self.visit_statement(&mut function, stmt, global_scope, None)?;
+                (inside_loop, returns) = self.visit_statement(&mut function, stmt, global_scope, None)?;
+                
+                if returns {
+                    // TODO: Add warning for unreachable code
+                    break
+                }
             }
         }
         
