@@ -362,6 +362,9 @@ impl<'a> Parser<'a> {
                 TokenType::Break => {
                     Ok(AST::Break(self.consume(pointer, TokenType::Break, None)?))
                 }
+                TokenType::Continue => {
+                    Ok(AST::Continue(self.consume(pointer, TokenType::Continue, None)?))
+                }
                 TokenType::If => self.parse_if_case(pointer),
                 TokenType::Return => self.parse_return(pointer),
                 _o => Err(CodeError::new_unexpected_token_error(
@@ -720,4 +723,5 @@ pub enum AST<'a> {
     },
     CondLoop(CondBlock<'a>),
     Break(&'a Token),
+    Continue(&'a Token),
 }

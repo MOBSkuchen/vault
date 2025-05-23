@@ -216,12 +216,12 @@ impl CodeError {
         )
     }
 
-    pub fn break_outside_loop(pos: &CodePosition) -> Self {
+    pub fn loop_stmt_outside_loop(pos: &CodePosition, stmt: &TokenType) -> Self {
         Self::new(
             *pos,
             CodeErrorType::BreakOutsideLoop,
-            "Break outside of loop".to_string(),
-            Some("Break here".to_string()),
+            "Loop statement outside of loop".to_string(),
+            Some(format!("{stmt} here")),
             "However, break can only be used inside of loops, e.g. while".to_string(),
             vec![]
         )

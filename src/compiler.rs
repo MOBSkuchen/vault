@@ -447,7 +447,7 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>) -> CodeResult<(bool, bool)> {
+    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> {
         let mut inside_loop = after_block.is_some();
         let mut returns = false;
         // Returns: inside_loop, returns
@@ -524,7 +524,7 @@ impl<'ctx> Compiler<'ctx> {
 
                 self.builder.position_at_end(body_block);
                 for stmt in cond.body {
-                    let (il, rets) = self.visit_statement(function, stmt, global_scope, Some(after_block))?;
+                    let (il, rets) = self.visit_statement(function, stmt, global_scope, Some(after_block), Some(&body_block))?;
                     if !il || rets {
                         inside_loop = false;
                         break;
@@ -595,6 +595,7 @@ impl<'ctx> Compiler<'ctx> {
                             stmt.clone(),
                             global_scope,
                             Some(after_block),
+                            Some(&body_bb)
                         )?;
                         returns = continue_block.1;
                         if !continue_block.0 || continue_block.1 {
@@ -619,6 +620,7 @@ impl<'ctx> Compiler<'ctx> {
                                 stmt.clone(),
                                 global_scope,
                                 Some(after_block),
+                                Some(&else_bb)
                             )?;
                             returns = continue_block.1;
                             if !continue_block.0 || continue_block.1 {
@@ -645,8 +647,13 @@ impl<'ctx> Compiler<'ctx> {
                     self.builder.position_at_end(after);
                     inside_loop = false;
                 } else {
-                    return Err(CodeError::break_outside_loop(&tok.code_position))
+                    return Err(CodeError::loop_stmt_outside_loop(&tok.code_position, &tok.token_type))
                 }
+            },
+            AST::Continue(tok) => if let Some(current) = cur_block {
+                self.builder.position_at_end(*current);
+            } else {
+                return Err(CodeError::loop_stmt_outside_loop(&tok.code_position, &tok.token_type))
             },
         }
         Ok((inside_loop, returns))
@@ -662,6 +669,7 @@ impl<'ctx> Compiler<'ctx> {
             AST::IfCondition { first, .. } => first.condition.code_position,
             AST::CondLoop(c) => c.condition.code_position,
             AST::Break(tok) => tok.code_position,
+            AST::Continue(tok) => tok.code_position,
         }
     }
 
@@ -689,7 +697,7 @@ impl<'ctx> Compiler<'ctx> {
         let mut returns;
         
         if let Some(body) = body {
-            function.new_block("entry", true);
+            let entry = function.new_block("entry", true);
             // Function params
             for (i, param) in params.iter().enumerate() {
                 let value = function.function_value.get_nth_param(i as u32).unwrap();
@@ -703,7 +711,7 @@ impl<'ctx> Compiler<'ctx> {
             let mut current = enumer.next().unwrap();
 
             while current.0 <= length {
-                (inside_loop, returns) = self.visit_statement(&mut function, current.1, global_scope, None)?;
+                (inside_loop, returns) = self.visit_statement(&mut function, current.1, global_scope, None, Some(&entry))?;
                 if returns && (current.0 + 1 < length) {
                     self.warning(CodeWarning::dead_code(Self::ast_to_codepos(&enumer.next().unwrap().1), None));
                     break

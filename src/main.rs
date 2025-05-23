@@ -1,8 +1,6 @@
 use std::env::temp_dir;
 use std::fmt::{Display, Formatter};
-use std::fs;
 use clap::{Arg, ValueHint};
-use clap_builder::builder::TypedValueParser;
 use clap_builder::Command;
 use inkwell::context::Context;
 use inkwell::targets::{TargetMachine, TargetTriple};

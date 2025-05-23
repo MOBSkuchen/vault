@@ -461,6 +461,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "break" => TokenType::Break,
                     "while" => TokenType::While,
                     "continue" => TokenType::Continue,
+                    "struct" => TokenType::Continue,
                     "i32" => TokenType::I32,
                     "f32" => TokenType::F32,
                     "f64" => TokenType::F64,
