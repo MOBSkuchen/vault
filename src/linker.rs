@@ -1,4 +1,6 @@
-use lld_rx::{link, LldFlavor, LldResult};
+use lld_rx::{link, LldFlavor};
+
+type LinkerResult = Result<(), String>;
 
 // Subsystem for windows builds
 pub enum ProdType {
@@ -51,7 +53,7 @@ fn set_output(lld_flavor: &LldFlavor, args: &mut Vec<String>, output: &String) {
 
 pub fn lld_link(target: LldFlavor, input_files: Vec<String>, output_path: &String,
             is_lib: bool, mut extra_args: Vec<String>, 
-            start_symbol: Option<String>, prod_type: ProdType) -> LldResult {
+            start_symbol: Option<String>, prod_type: ProdType) -> LinkerResult {
     if is_lib && start_symbol.is_some() {
         println!("Start symbol {} will be discarded as you are building a library.", start_symbol.clone().unwrap());
     }
@@ -67,13 +69,13 @@ pub fn lld_link(target: LldFlavor, input_files: Vec<String>, output_path: &Strin
     // Windows only
     if let LldFlavor::Coff = target { args.push(prod_type.to_arg()) }
 
-    if start_symbol.is_some() {
-        set_entry(&target, &mut args, start_symbol.unwrap());
+    if let Some(start_symbol) = start_symbol {
+        set_entry(&target, &mut args, start_symbol);
     }
     
     set_output(&target, &mut args, output_path);
     
     args.append(&mut extra_args);
     
-    link(target, args)
+    link(target, args).ok()
 }

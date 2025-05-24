@@ -2,7 +2,7 @@ use inkwell::module::Module;
 use inkwell::OptimizationLevel;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
-use crate::OptLevel;
+use crate::{DevDebugLevel, OptLevel};
 
 pub struct Codegen {
     target_triple: TargetTriple,
@@ -39,9 +39,9 @@ impl Codegen {
         target_machine
     }
 
-    pub fn optimize(&self, module: &Module, opt_level: &OptLevel) {
+    pub fn optimize(&self, module: &Module, opt_level: &OptLevel, dev_debug_level: DevDebugLevel) {
         let pb = PassBuilderOptions::create();
-        // pb.set_debug_logging(true);
+        pb.set_debug_logging(dev_debug_level as u32 >= 3);
         let pass = match opt_level {
             OptLevel::Null => "default<O0>",
             OptLevel::One => "default<O1>",

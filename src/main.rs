@@ -26,6 +26,14 @@ mod filemanager;
 mod codeviz;
 mod linker;
 
+#[derive(Copy, Clone)]
+enum DevDebugLevel {
+    Null = 0,       // Nothing
+    Regular = 1,    // View finished LLVM-IR
+    More = 2,       // Also view AST and tokens
+    Full = 3        // Also view LLVM optimizer output
+}
+
 enum OptLevel {
     Null = 0,
     One = 1,
@@ -167,7 +175,8 @@ struct CompileJobData {
     target_triple: TargetTriple,
     optimization: OptLevel,
     module_id: String,
-    output_type: CompOutputType
+    output_type: CompOutputType,
+    dev_debug_level: DevDebugLevel
 }
 
 struct LinkJobData {
@@ -177,6 +186,7 @@ struct LinkJobData {
     libs: Vec<String>,
     stdlib: bool,
     entry: String,
+    dev_debug_level: DevDebugLevel
 }
 
 impl Display for CompileJobData {
@@ -192,9 +202,16 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let tokens = tokenize(file_manager.get_content())?;
     println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
     
+    if compile_job_data.dev_debug_level as u32 >= 2 { 
+        println!("Parsed Tokens:\n{:#?}", tokens);
+    }
+    
     let parser = Parser::new(tokens, file_manager);
     let ast = parser.parse(&mut 0)?;
-    println!("{:#?}", ast);
+
+    if compile_job_data.dev_debug_level as u32 >= 2 {
+        println!("Parsed AST:\n{:#?}", ast);
+    }
 
     let context = Context::create();
     let builder = context.create_builder();
@@ -202,11 +219,17 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let compiler = Compiler::new(&context, &builder, compile_job_data.module_id, file_manager);
 
     let module = compiler.comp_ast(module, ast)?;
-    module.print_to_stderr();
+    if compile_job_data.dev_debug_level as u32 >= 1 {
+        println!("LLVM-Module (pre optimize):");
+        module.print_to_stderr();
+    }
     module.verify().expect("VERIFY");
     let codegen = Codegen::new(Some(compile_job_data.target_triple), None, None, None);
-    codegen.optimize(&module, &compile_job_data.optimization);
-    module.print_to_stderr();
+    codegen.optimize(&module, &compile_job_data.optimization, compile_job_data.dev_debug_level);
+    if compile_job_data.dev_debug_level as u32 >= 1 {
+        println!("LLVM-Module (post optimize):");
+        module.print_to_stderr();
+    }
     let file = match compile_job_data.output_type {
         CompOutputType::Object => codegen.gen_obj(&module, compile_job_data.output),
         CompOutputType::Asm => codegen.gen_asm(&module, compile_job_data.output),
@@ -254,7 +277,8 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
         target_triple: TargetMachine::get_default_triple(),
         optimization: OptLevel::Full,
         module_id: "main".to_string(),
-        output_type: CompOutputType::Object
+        output_type: CompOutputType::Object,
+        dev_debug_level: link_job_data.dev_debug_level
     };
 
     let x = compile_job(&file_manager, compile_job_data);
@@ -273,14 +297,21 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
         libs.push("msvcrt.lib".to_string());
     }
 
-    println!("Linking `{tmp_file}` with `{:?}`", libs);
+    println!("Linking `{tmp_file}` with {} libs: {}", libs.len(), libs.iter().map(|x1| {format!("`{x1}`")}).collect::<Vec<String>>().join(", "));
 
-    lld_link(link_job_data.output_type.into(),
+    let linker_result = lld_link(link_job_data.output_type.into(),
              vec![tmp_file], &link_job_data.output, link_job_data.lib, libs,
              if link_job_data.lib { None } else { Some(link_job_data.entry) }, ProdType::Console);
-
-    println!("Finished writing file to `{}`", link_job_data.output);
-
+    
+    match linker_result {
+        Ok(_) => {
+            println!("Finished writing to `{}`", link_job_data.output);
+        }
+        Err(msg) => {
+            println!("Failed to link, terminating building. Reason:\n{msg}");
+        }
+    }
+    
     false
 }
 
@@ -411,7 +442,27 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                 .help("Print version")
                 .action(clap::ArgAction::Version),
         )
+        .arg(
+            Arg::new("dev-debug")
+                .short('Ö')
+                .long("dev-debug-level")
+                .help("Compiler developer debug printing level")
+                .action(clap::ArgAction::Set),
+        )
         .get_matches();
+    
+    let dev_debug_level = if let Some(dev_debug_level) = matches.get_one::<String>("dev-debug") {
+        match dev_debug_level.parse().unwrap() {
+            0 => DevDebugLevel::Null,
+            1 => DevDebugLevel::Regular,
+            2 => DevDebugLevel::More,
+            3 => DevDebugLevel::Full,
+            _ => {
+                println!("unknown dev debug level, defaulting to 0");
+                DevDebugLevel::Null
+            }
+        }
+    } else {DevDebugLevel::Null};
 
     match matches.subcommand() {
         Some(("compile", sub)) => {
@@ -435,6 +486,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                 optimization,
                 module_id,
                 output_type,
+                dev_debug_level
             };
 
             compile(item.to_owned(), data);
@@ -462,6 +514,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                 stdlib: !no_std,
                 libs,
                 entry,
+                dev_debug_level
             };
 
             compile_and_link(item.to_owned(), data);
