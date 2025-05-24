@@ -381,9 +381,9 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                         .required(true),
                 )
                 .arg(
-                    Arg::new("comp-out-type")
-                        .long("comp-output-type")
-                        .alias("cot")
+                    Arg::new("out-type")
+                        .long("output-type")
+                        .visible_alias("ot")
                         .help("Set the output type instead of inferring it [FOR COMPILING]")
                         .value_name("TYPE")
                         .required(false),
@@ -455,9 +455,9 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                         .action(clap::ArgAction::SetTrue),
                 )
                 .arg(
-                    Arg::new("link-out-type")
-                        .long("link-output-type")
-                        .alias("lot")
+                    Arg::new("out-type")
+                        .long("output-type")
+                        .visible_alias("ot")
                         .help("Set the output type instead of inferring it [FOR LINKING]")
                         .value_name("TYPE"),
                 )
@@ -503,7 +503,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
         Some(("compile", sub)) => {
             let item = sub.get_one::<String>("file").unwrap();
             let mut output = sub.get_one::<&str>("output").unwrap_or(&"output").to_string();
-            let output_type: CompOutputType = sub.get_one::<String>("comp-out-type").into();
+            let output_type: CompOutputType = sub.get_one::<String>("out-type").into();
             if !sub.contains_id("output") {
                 output = format!("{output}.{}", output_type.to_f_ext());
             }
@@ -531,7 +531,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
             let lib = sub.get_flag("library");
             let no_std = sub.get_flag("no-standard");
             let mut output = sub.get_one::<&str>("output").unwrap_or(&"output").to_string();
-            let output_type: LinkOutputType = sub.get_one::<String>("link-out-type").into();
+            let output_type: LinkOutputType = sub.get_one::<String>("out-type").into();
             if !sub.contains_id("output") {
                 output = format!("{output}{}", output_type.to_f_ext(lib));
             }
