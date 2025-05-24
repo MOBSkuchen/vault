@@ -532,7 +532,7 @@ impl<'ctx> Compiler<'ctx> {
             ExpressionKind::Malloc { amount } => {
                 let cpos = amount.code_position;
                 let (value, typ) = self.visit_expr(function, global_scope, *amount, Some(&TypesKind::U32), false)?;
-                if is_type_signed(&typ) { 
+                if is_type_signed(&typ) {
                     return Err(CodeError::is_signed(cpos, typ))
                 }
                 let ptr = self.builder.build_array_malloc(self.context.i8_type(), value.as_basic_value_enum().into_int_value(), "").expect("Failed to build malloc");
@@ -667,14 +667,19 @@ impl<'ctx> Compiler<'ctx> {
                     let body_bb = body_blocks[i];
 
                     self.builder.position_at_end(cond_bb);
-
-                    let cond_val = self.visit_expr(
+                    
+                    let (cond_val, vt) = self.visit_expr(
                         function,
                         global_scope,
                         cond_block.condition.clone(),
                         None,
-                        true,
-                    )?.0.as_any_value_enum().into_int_value();
+                        true)?;
+                    
+                    if vt != TypesKind::Bool {
+                        return Err(CodeError::conditions_must_be_bool(cond_block.condition.code_position, vt))
+                    }
+                    
+                    let cond_val = cond_val.as_basic_value_enum().into_int_value();
 
                     let zero = cond_val.get_type().const_zero();
                     let cond = self.builder
@@ -833,7 +838,7 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_return(None).expect("Failed to empty attach return");
             }
         }
-        
+
         Ok(())
     }
     
