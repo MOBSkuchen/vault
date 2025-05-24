@@ -64,6 +64,10 @@ pub enum CodeErrorType {
     FieldNotFound,
     WrongDirectiveSignature,
     UnknownDirective,
+    BinOpOnNonPrimitiveType,
+    IsSigned,
+    CanOnlyFreePointers,
+    ConditionsMustBeBools
 }
 
 #[derive(Debug)]
@@ -310,6 +314,50 @@ impl CodeError {
             Some(format!("Called `{name}`")),
             format!("The directive `{name}` does not exist"),
             vec!["Did you spell it right?".to_string(), "Consult the README for a list of directives".to_string()]
+        )
+    }
+
+    pub fn bin_op_on_non_primitive_type(code_position: CodePosition, typ: TypesKind) -> Self {
+        Self::new(
+            code_position,
+            CodeErrorType::BinOpOnNonPrimitiveType,
+            "Binary operation on non primitive type".to_string(),
+            Some(format!("This is of type `{typ}`")),
+            "Can only do binary operations on primitive types".to_string(),
+            vec!["Primitive types are: i32, i64, u32, u64, u8, bool, f32, f64".to_string()]
+        )
+    }
+
+    pub fn is_signed(code_position: CodePosition, typ: TypesKind) -> Self {
+        Self::new(
+            code_position,
+            CodeErrorType::IsSigned,
+            "Value is signed".to_string(),
+            Some(format!("This is of type `{typ}` (signed)")),
+            "Malloc requires a non-zero value, e.g. an unsinged integer".to_string(),
+            vec![]
+        )
+    }
+
+    pub fn can_only_free_pointers(code_position: CodePosition, typ: TypesKind) -> Self {
+        Self::new(
+            code_position,
+            CodeErrorType::CanOnlyFreePointers,
+            "Can only free pointers".to_string(),
+            Some(format!("This is of type `{typ}` (not a pointer)")),
+            "Free requires a pointer".to_string(),
+            vec![]
+        )
+    }
+
+    pub fn conditions_must_be_bool(code_position: CodePosition, typ: TypesKind) -> Self {
+        Self::new(
+            code_position,
+            CodeErrorType::ConditionsMustBeBools,
+            "Conditions must be bools".to_string(),
+            Some(format!("This is of type `{typ}` (not a bool)")),
+            "Conditions may only be bools".to_string(),
+            vec!["You can probably cast your type into a bool".to_string()]
         )
     }
 

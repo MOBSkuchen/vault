@@ -7,6 +7,7 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType};
 use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
+use inkwell::values::AnyValueEnum::InstructionValue;
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::directives::{visit_directive, CompilationConfig};
@@ -35,7 +36,7 @@ fn resolve_prim_res<T>(result: Result<T, PrimitiveErrors>, tok: &Token) -> CodeR
 }
 
 fn is_type_signed(typ: &TypesKind) -> bool {
-    !matches!(typ, TypesKind::U32 | TypesKind::U64 | TypesKind::U8)
+    !matches!(typ, TypesKind::U32 | TypesKind::U64 | TypesKind::U8 | TypesKind::Bool)
 }
 
 fn hinted_int<'a>(hint: Option<&TypesKind>, ctx: &'a Context) -> (IntType<'a>, TypesKind) {
@@ -179,9 +180,9 @@ impl<'ctx> Compiler<'ctx> {
         Box::new(self.builder.build_int_compare(IntPredicate::NE, cond, self.context.custom_width_int_type(1).const_zero(), "is_nonzero").expect("Failed cond comp").as_basic_value_enum())
     }
 
-    fn visit_bin_op<'a>(&'a self, lhs: Box<(dyn BasicValue<'a> + 'a)>, rhs: Box<(dyn BasicValue<'a> + 'a)>, op: BinaryOp, typ: TypesKind) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
+    fn visit_bin_op<'a>(&'a self, code_position: CodePosition, lhs: Box<(dyn BasicValue<'a> + 'a)>, rhs: Box<(dyn BasicValue<'a> + 'a)>, op: BinaryOp, typ: TypesKind) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
         let result: (Box<dyn BasicValue<'a>>, TypesKind) = match typ {
-            TypesKind::I32 | TypesKind::U32 | TypesKind::I64 | TypesKind::U64 | TypesKind::U8 => {
+            TypesKind::I32 | TypesKind::U32 | TypesKind::I64 | TypesKind::U64 | TypesKind::U8 | TypesKind::Bool => {
                 let lhs = basic_value_box_into_int(lhs);
                 let rhs = basic_value_box_into_int(rhs);
 
@@ -237,7 +238,7 @@ impl<'ctx> Compiler<'ctx> {
                 }
             }
 
-            _ => panic!(""),
+            _ => return Err(CodeError::bin_op_on_non_primitive_type(code_position, typ)),
         };
         Ok(result)
     }
@@ -255,7 +256,6 @@ impl<'ctx> Compiler<'ctx> {
             CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Struct { name: "struct".to_string() }, notes)
         }
     }
-    
 
     fn visit_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace<'_>, expr: Expression, 
                       type_hint: Option<&TypesKind>, must_use: bool) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
@@ -275,12 +275,13 @@ impl<'ctx> Compiler<'ctx> {
             }
             ExpressionKind::BinaryOp { lhs, op, rhs } => {
                 let cpos = rhs.code_position;
+                let cpos_left = lhs.code_position;
                 let (lhs_val, l_typ) = self.visit_expr(function, global_scope, *lhs, type_hint, true)?;
                 let (rhs_val, r_typ) = self.visit_expr(function, global_scope, *rhs, Some(&l_typ), true)?;
                 if l_typ != r_typ {
                     return Err(CodeError::type_mismatch(&cpos, &r_typ, &l_typ, vec!["This is because the right side must have the same type as the left side".to_string()]));
                 }
-                self.visit_bin_op(lhs_val, rhs_val, op.1, l_typ)?
+                self.visit_bin_op(cpos_left.merge(cpos), lhs_val, rhs_val, op.1, l_typ)?
             }
             ExpressionKind::FunctionCall { name, arguments } => {
                 let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).ok_or_else(|| {
@@ -318,7 +319,6 @@ impl<'ctx> Compiler<'ctx> {
                 let global = self.builder.build_global_string_ptr(&string.content, "").expect("Failed to create global str ptr").as_pointer_value();
                 (Box::new(global.as_basic_value_enum()), TypesKind::Ptr(Box::new(TypesKind::U8)))
             }
-            ExpressionKind::Type { .. } => {todo!("Implement")}
             ExpressionKind::CastExpr { expr, typ: new_type } => {
                 let (value, old_type) = self.visit_expr(function, global_scope, *expr, None, true)?;
                 let value = value.as_basic_value_enum();
@@ -530,16 +530,20 @@ impl<'ctx> Compiler<'ctx> {
                 }
             },
             ExpressionKind::Malloc { amount } => {
+                let cpos = amount.code_position;
                 let (value, typ) = self.visit_expr(function, global_scope, *amount, Some(&TypesKind::U32), false)?;
-                if is_type_signed(&typ) { panic!("Must be uint") }
+                if is_type_signed(&typ) { 
+                    return Err(CodeError::is_signed(cpos, typ))
+                }
                 let ptr = self.builder.build_array_malloc(self.context.i8_type(), value.as_basic_value_enum().into_int_value(), "").expect("Failed to build malloc");
                 (Box::new(ptr.as_basic_value_enum()), TypesKind::Ptr(Box::new(TypesKind::U8)))
             }
             ExpressionKind::Free { var } => {
                 // TODO: Maybe make this a statement?
+                let cpos = var.code_position;
                 let (value, typ) = self.visit_expr(function, global_scope, *var, Some(&TypesKind::Pointer), false)?;
                 if !matches!(typ, TypesKind::Ptr(_) | TypesKind::Pointer) {
-                    panic!("Can only free pointers")
+                    return Err(CodeError::can_only_free_pointers(cpos, typ))
                 }
                 self.builder.build_free(value.as_basic_value_enum().into_pointer_value()).expect("Failed to free");
                 (value, typ)
@@ -602,6 +606,7 @@ impl<'ctx> Compiler<'ctx> {
                 returns = true;
             },
             AST::CondLoop(cond) => {
+                let cpos = cond.condition.code_position;
                 inside_loop = true;
                 
                 let cond_block = function.new_block("cond", false);
@@ -615,7 +620,7 @@ impl<'ctx> Compiler<'ctx> {
                 {
                     let (cond_value, typ) = self.visit_expr(function, global_scope, cond.condition, None, true)?;
                     if typ != TypesKind::Bool {
-                        panic!("Must be a bool")
+                        return Err(CodeError::conditions_must_be_bool(cpos, typ))
                     }
                     let condition = cond_value.as_basic_value_enum().into_int_value();
                     self.builder.build_conditional_branch(condition, body_block, after_block)

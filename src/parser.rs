@@ -591,12 +591,12 @@ impl<'a> Parser<'a> {
                 TokenType::Ref => {
                     Ok(Expression {expression: ExpressionKind::Reference {
                         var: self.consume(pointer, TokenType::Identifier, Some("`&` is a ref-token, which must be followed by a variable to reference".to_string()))? }
-                        , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
+                        , code_position: token.code_position.merge(self.tokens[*pointer - 1].code_position) })
                 },
                 TokenType::Star => {
                     Ok(Expression {expression: ExpressionKind::Dereference {
                         var: self.consume(pointer, TokenType::Identifier, Some("`*` is a deref-token, which must be followed by a variable to a pointer".to_string()))? }
-                        , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
+                        , code_position: token.code_position.merge(self.tokens[*pointer - 1].code_position) })
                 }
                 TokenType::Malloc => {
                     Ok(Expression {expression: ExpressionKind::Malloc {
@@ -807,7 +807,6 @@ pub enum ExpressionKind<'a> {
     },
     Identifier(&'a Token),
     String(&'a Token),
-    Type { typ: Types<'a>, token: &'a Token },
     BinaryOp { lhs: Box<Expression<'a>>, op: (&'a Token, BinaryOp), rhs: Box<Expression<'a>> },
     CastExpr { expr: Box<Expression<'a>>, typ: Types<'a> },
     FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
