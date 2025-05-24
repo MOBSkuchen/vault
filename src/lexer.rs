@@ -185,17 +185,6 @@ impl CodePosition {
         }
     }
 
-    pub fn is_eof(&self) -> bool {
-        [
-            self.idx_start,
-            self.line_start,
-            self.line_idx_start,
-            self.line_idx_end,
-        ]
-            .iter()
-            .all(|t| *t == 0)
-    }
-
     pub fn merge(&self, other: Self) -> Self {
         Self {
             idx_start: self.idx_start,
@@ -296,13 +285,6 @@ impl Scanner {
 
                 Some(character)
             }
-            None => None,
-        }
-    }
-
-    pub fn current(&self) -> Option<&char> {
-        match self.characters.get(self.cursor) {
-            Some(character) => Some(character),
             None => None,
         }
     }

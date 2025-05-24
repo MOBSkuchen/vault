@@ -132,7 +132,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
             }
             let left = visit_directive(*right.clone(), compilation_config)?;
             let right = visit_directive(*right.clone(), compilation_config)?;
-            return Ok(left && right);
+            Ok(left && right)
         }
         "OR" => {
             virtual_directive_args! {
@@ -142,7 +142,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
             }
             let left = visit_directive(*left.clone(), compilation_config)?;
             let right = visit_directive(*right.clone(), compilation_config)?;
-            return Ok(left || right);
+            Ok(left || right)
         }
         "ALWAYS" => {
             virtual_directive_args! {
@@ -150,7 +150,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ ],
                 values = directive.arguments,
             }
-            return Ok(true);
+            Ok(true)
         }
         "NEVER" => {
             virtual_directive_args! {
@@ -158,7 +158,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ ],
                 values = directive.arguments,
             }
-            return Ok(false);
+            Ok(false)
         }
         "NOT" => {
             virtual_directive_args! {
@@ -167,8 +167,52 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 values = directive.arguments,
             }
             let left = visit_directive(*expr.clone(), compilation_config)?;
-            return Ok(!left);
+            Ok(!left)
         }
-        _ => return Err(CodeError::unknown_directive(directive.name)) 
-    };
+        "ON_OS" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ os: String ],
+                values = directive.arguments,
+            }
+            Ok(std::env::consts::OS == os)
+        }
+        "DEBUG" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [],
+                values = directive.arguments,
+            }
+            Ok(compilation_config.debug)
+        }
+        "LINK" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ lib: String ],
+                values = directive.arguments,
+            }
+            compilation_config.additional_libs.push(lib.clone());
+            Ok(true)
+        }
+        "IF" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ cond: Directive, exe: Directive,  ],
+                values = directive.arguments,
+            }
+            let ret = if visit_directive(*cond.clone(), compilation_config)? { visit_directive(*exe.clone(), compilation_config)? } else { false };
+            Ok(ret)
+        }
+        // IF IMMUTABLE
+        "IFI" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ cond: Directive, exe: Directive,  ],
+                values = directive.arguments,
+            }
+            if visit_directive(*cond.clone(), compilation_config)? { visit_directive(*exe.clone(), compilation_config)?; }
+            Ok(true)
+        }
+        _ => Err(CodeError::unknown_directive(directive.name)) 
+    }
 }
