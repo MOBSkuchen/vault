@@ -178,7 +178,8 @@ struct CompileJobData {
     optimization: OptLevel,
     module_id: String,
     output_type: CompOutputType,
-    dev_debug_level: DevDebugLevel
+    dev_debug_level: DevDebugLevel,
+    debug: bool,
 }
 
 struct LinkJobData {
@@ -188,7 +189,8 @@ struct LinkJobData {
     libs: Vec<String>,
     stdlib: bool,
     entry: String,
-    dev_debug_level: DevDebugLevel
+    dev_debug_level: DevDebugLevel,
+    debug: bool,
 }
 
 impl Display for CompileJobData {
@@ -238,7 +240,7 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let module = context.create_module(&compile_job_data.module_id);
     let compiler = Compiler::new(&context, &builder, compile_job_data.module_id, file_manager);
 
-    let mut compilation_config = CompilationConfig::new(false);
+    let mut compilation_config = CompilationConfig::new(compile_job_data.debug);
     let module = compiler.comp_ast(module, ast, &mut compilation_config)?;
     if compile_job_data.dev_debug_level as u32 >= 1 {
         println!("LLVM-Module (pre optimize):");
@@ -307,7 +309,8 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
         optimization: OptLevel::Full,
         module_id: "main".to_string(),
         output_type: CompOutputType::Object,
-        dev_debug_level: link_job_data.dev_debug_level
+        dev_debug_level: link_job_data.dev_debug_level,
+        debug: link_job_data.debug
     };
 
     let x = compile_job(&file_manager, compile_job_data);
@@ -416,6 +419,13 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                         .value_hint(ValueHint::AnyPath)
                         .value_name("FILE"),
                 )
+                .arg(
+                    Arg::new("debug")
+                        .long("debug")
+                        .short('d')
+                        .help("Enable debug mode")
+                        .action(clap::ArgAction::SetTrue),
+                )
         )
         .subcommand(
             Command::new("build")
@@ -452,6 +462,13 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                     Arg::new("library")
                         .long("dst-lib")
                         .help("Set linking output type to library")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("debug")
+                        .long("debug")
+                        .short('d')
+                        .help("Enable debug mode")
                         .action(clap::ArgAction::SetTrue),
                 )
                 .arg(
@@ -521,7 +538,8 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                 optimization,
                 module_id,
                 output_type,
-                dev_debug_level
+                dev_debug_level,
+                debug: sub.get_flag("debug")
             };
 
             compile(item.to_owned(), data);
@@ -549,7 +567,8 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                 stdlib: !no_std,
                 libs,
                 entry,
-                dev_debug_level
+                dev_debug_level,
+                debug: sub.get_flag("debug")
             };
 
             compile_and_link(item.to_owned(), data);
