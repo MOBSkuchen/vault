@@ -406,7 +406,52 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 return Ok(scanner.this_as_token(TokenType::Ref));
             }
             '-' => {
-                scanner.pop();
+                // Record the start position *before* consuming the '-' so we can slice
+                let start_pos = scanner.cursor;
+                scanner.pop(); // consume the '-'
+
+                // If the next character is a digit, parse a (possibly floating-point) literal
+                if let Some(next) = scanner.peek() {
+                    if next.is_digit(10) {
+                        let mut is_float = false;
+                        // consume all digits, and at most one '.'
+                        while let Some(&c) = scanner.peek() {
+                            if c.is_digit(10) {
+                                scanner.pop();
+                            } else if c == '.' && !is_float {
+                                is_float = true;
+                                scanner.pop();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        // collect the slice “-123.45”
+                        let number: String = scanner.characters[start_pos..scanner.cursor]
+                            .iter()
+                            .collect();
+                        let token_type = if is_float {
+                            TokenType::NumberFloat
+                        } else {
+                            TokenType::NumberInt
+                        };
+                        return Ok(Some(Token {
+                            content: number.clone(),
+                            token_type,
+                            code_position: CodePosition {
+                                idx_start: start_pos,
+                                idx_end: scanner.cursor,
+                                line_start: scanner.line,
+                                line_end: scanner.line,
+                                // line_idx_start should back up by the full literal length
+                                line_idx_start: scanner.line_idx - number.len(),
+                                line_idx_end: scanner.line_idx,
+                            },
+                        }));
+                    }
+                }
+
+                // Otherwise it was just a minus operator
                 return Ok(scanner.this_as_token(TokenType::Minus));
             }
             '~' => {

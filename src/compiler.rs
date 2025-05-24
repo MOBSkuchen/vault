@@ -251,7 +251,7 @@ impl<'ctx> Compiler<'ctx> {
     fn null(&self) -> IntValue<'ctx> {
         self.context.i32_type().const_zero()
     }
-    
+
     fn struct_access_type_mismatch_error(parent_cpos: &CodePosition, parent_type: &TypesKind) -> CodeError {
         let mut notes = vec!["Can only access elements from struct (pointers)".to_string()];
         if matches!(parent_type, TypesKind::Struct { .. }) {
@@ -273,7 +273,7 @@ impl<'ctx> Compiler<'ctx> {
             }
             ExpressionKind::IntNumber { value, .. } => {
                 let (hint, vt) = hinted_int(type_hint, self.context);
-                (Box::new(hint.const_int(value, is_type_signed(&vt)).as_basic_value_enum()), vt)
+                (Box::new(hint.const_int(value as u64, is_type_signed(&vt)).as_basic_value_enum()), vt)
             }
             ExpressionKind::FloatNumber { value, .. } => {
                 let(hint, vt) = hinted_float(type_hint, self.context);

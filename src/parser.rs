@@ -492,7 +492,7 @@ impl<'a> Parser<'a> {
         while let Some(token) = self.peek(pointer) {
             match token.token_type {
                 TokenType::Star | TokenType::Slash | TokenType::DoubleEquals | TokenType::Lesser | TokenType::Greater |
-                TokenType::GreaterEquals | TokenType::LesserEquals | TokenType::And | TokenType::Or  => {
+                TokenType::GreaterEquals | TokenType::LesserEquals | TokenType::And | TokenType::Or | TokenType::NotEquals => {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_primary(pointer)?;
                     let cpos = node.code_position.merge(right.code_position);
@@ -528,7 +528,7 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| CodeError::missing_token_error(self.previous(pointer).unwrap()))?;
             match token.token_type {
                 TokenType::Ref => {
-                    Ok(Expression {expression: ExpressionKind::Reference { 
+                    Ok(Expression {expression: ExpressionKind::Reference {
                         var: self.consume(pointer, TokenType::Identifier, Some("`&` is a ref-token, which must be followed by a variable to reference".to_string()))? }
                         , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
                 },
@@ -737,7 +737,7 @@ impl<'a> Types<'a> {
 #[derive(Debug, Clone)]
 pub enum ExpressionKind<'a> {
     IntNumber {
-        value: u64,
+        value: i64,
         token: &'a Token,
     },
     FloatNumber {
