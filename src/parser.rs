@@ -394,6 +394,7 @@ impl<'a> Parser<'a> {
                 }
                 TokenType::If => self.parse_if_case(pointer),
                 TokenType::Return => self.parse_return(pointer),
+                TokenType::LParen | TokenType::Free | TokenType::Malloc | TokenType::Star | TokenType::Ref => Ok(AST::Expression {expr: self.parse_expression(pointer)? }),
                 _o => Err(CodeError::new_unexpected_token_error(
                     token,
                     TokenType::Statement,
