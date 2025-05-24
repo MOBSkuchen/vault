@@ -62,6 +62,8 @@ pub enum CodeErrorType {
     BreakOutsideLoop,
     NonVoidNoReturn,
     FieldNotFound,
+    WrongDirectiveArgTypes,
+    UnknownDirective,
 }
 
 #[derive(Debug)]
@@ -285,6 +287,28 @@ impl CodeError {
             Some("This field".to_string()),
             format!("The field `{token}` of struct {struct_name} is referenced here, but the struct has no such field"),
             vec![]
+        )
+    }
+
+    pub fn wrong_directive_arg_type(name: &Token, typ: Vec<TokenType>) -> Self {
+        Self::new(
+            name.code_position,
+            CodeErrorType::WrongDirectiveArgTypes,
+            "Wrong directive args".to_string(),
+            Some(format!("For the directive `{name}`")),
+            format!("The directive `{name}` takes arguments of type(s) {}, but you supplied something wrong", typ.iter().map(|x| {format!("`{x}`")}).collect::<Vec<String>>().join(" and ")),
+            vec![]
+        )
+    }
+
+    pub fn unknown_directive(name: &Token) -> Self {
+        Self::new(
+            name.code_position,
+            CodeErrorType::UnknownDirective,
+            "Unknown Directive".to_string(),
+            Some(format!("Called `{name}`")),
+            format!("The directive `{name}` does not exist"),
+            vec!["Did you spell it right?".to_string(), "Consult the README for a list of directives".to_string()]
         )
     }
 

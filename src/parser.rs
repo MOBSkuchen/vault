@@ -145,6 +145,12 @@ impl<'a> Parser<'a> {
                     statements.push(func);
                 }
 
+                TokenType::Directive => {
+                    self.advance(pointer);
+                    let func = self.parse_directive(pointer)?;
+                    statements.push(func);
+                }
+
                 // // Parse import statements
                 // TokenType::Import => {
                 //     let import_stmt = self.parse_import(pointer)?;
@@ -273,7 +279,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Consume the closing ')'
         self.consume(pointer, TokenType::RParen, Some("Expected `)` after arguments".to_string()))?;
 
         let end_pos = self.previous(pointer).unwrap().code_position;
@@ -498,17 +503,6 @@ impl<'a> Parser<'a> {
                     let cpos = node.code_position.merge(right.code_position);
                     node = (ExpressionKind::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) }).into_expression(cpos);
                 }
-                /*
-                else if next.token_type == TokenType::Dot {
-                    self.consume(pointer, TokenType::Dot, None)?;
-                    let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
-                    return Ok(Expression { expression : ExpressionKind::Access {parent: name_tok, child, ptr: false}, code_position: name_tok.code_position.merge(child.code_position)})
-                } else if next.token_type == TokenType::Relative {
-                    self.consume(pointer, TokenType::Relative, None)?;
-                    let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
-                    return Ok(Expression { expression : ExpressionKind::Access {parent: name_tok, child, ptr: true}, code_position: name_tok.code_position.merge(child.code_position)})
-                }
-                 */
                 _ => break,
             }
         }
@@ -521,6 +515,29 @@ impl<'a> Parser<'a> {
             return Ok(Expression { expression : ExpressionKind::Access {parent: Box::new(node), child, ptr: true}, code_position: cpos.merge(child.code_position)})
         }
         Ok(node)
+    }
+    
+    fn parse_directive(&self, pointer: &mut usize) -> CodeResult<AST> {
+        let name = self.consume(pointer, TokenType::Identifier, Some("Expected a directive name".to_string()))?;
+        
+        let mut arguments = vec![];
+
+        loop {
+            let token = self.current(pointer).unwrap();
+            if self.match_token(pointer, TokenType::SemiColon)? {
+                break
+            } else if self.match_token(pointer, TokenType::Identifier)? {
+                arguments.push(DirectiveArgType::Identifier {value: token.content.clone(), token })
+            } else if self.match_token(pointer, TokenType::NumberInt)? {
+                arguments.push(DirectiveArgType::IntNumber {value: token.content.parse().unwrap(), token })
+            } else if self.match_token(pointer, TokenType::NumberFloat)? {
+                arguments.push(DirectiveArgType::FloatNumber {value: token.content.parse().unwrap(), token })
+            } else if self.match_token(pointer, TokenType::String)? {
+                arguments.push(DirectiveArgType::String {value: token.content.parse().unwrap(), token })
+            } else {break}
+        }
+        
+        Ok(AST::Directive {name, arguments})
     }
 
     fn parse_primary(&self, pointer: &mut usize) -> CodeResult<Expression> {
@@ -777,6 +794,14 @@ pub struct CondBlock<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub enum DirectiveArgType<'a> {
+    IntNumber { value: i64, token: &'a Token},
+    FloatNumber { value: f64, token: &'a Token},
+    String { value: String, token: &'a Token},
+    Identifier { value: String, token: &'a Token}
+}
+
+#[derive(Debug, Clone)]
 pub enum AST<'a> {
     Expression { expr: Expression<'a > },
     FunctionDef {
@@ -801,4 +826,5 @@ pub enum AST<'a> {
         name: &'a Token,
         members: Vec<(&'a Token, Types<'a>)>
     },
+    Directive { name: &'a Token, arguments: Vec<DirectiveArgType<'a>> }
 }

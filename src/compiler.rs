@@ -6,12 +6,13 @@ use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType};
-use inkwell::values::{AsValueRef, BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
+use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
+use crate::directives::{CompilationConfig, Directive};
 use crate::filemanager::FileManager;
-use crate::lexer::{CodePosition, Token};
-use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
+use crate::lexer::{CodePosition, Token, TokenType};
+use crate::parser::{BinaryOp, DirectiveArgType, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
 
 enum PrimitiveErrors {
     TypeVoidUnallowed,
@@ -108,13 +109,6 @@ fn basic_value_box_into_int<'a>(value: Box<(dyn BasicValue<'a> + 'a)>) -> IntVal
 fn basic_value_box_into_float<'a>(value: Box<(dyn BasicValue<'a> + 'a)>) -> FloatValue<'a> {
     value.as_basic_value_enum().into_float_value()
 }
-
-macro_rules! build_bin_op {
-    ($builder:expr, $kind:ident, $lhs:expr, $rhs:expr, $op:ident, $expect:expr) => {
-        Box::new($builder.$kind($lhs, $rhs, "").expect($expect))
-    };
-}
-
 
 pub struct Compiler<'ctx> {
     context: &'ctx Context,
@@ -559,7 +553,6 @@ impl<'ctx> Compiler<'ctx> {
         // Returns: inside_loop, returns
         
         match statement {
-            AST::FunctionDef { .. } | AST::Struct { .. } => panic!("Function definition is not allowed here (YET)"),
             AST::VariableDef { name, value, typ } => {
                 let mut typ_tok: &Token = name;
 
@@ -762,6 +755,7 @@ impl<'ctx> Compiler<'ctx> {
             } else {
                 return Err(CodeError::loop_stmt_outside_loop(&tok.code_position, &tok.token_type))
             },
+            _ => unreachable!(),
         }
         Ok((inside_loop, returns))
     }
@@ -778,6 +772,7 @@ impl<'ctx> Compiler<'ctx> {
             AST::Break(tok) => tok.code_position,
             AST::Continue(tok) => tok.code_position,
             AST::Struct { name, .. } => name.code_position,
+            AST::Directive { name, .. } => name.code_position,
         }
     }
 
@@ -853,18 +848,57 @@ impl<'ctx> Compiler<'ctx> {
     fn warning(&self, code_warning: CodeWarning) {
         print_code_warn(code_warning, self.file_manager);
     }
+    
+    fn visit_directive(&self, name: &Token, arguments: Vec<DirectiveArgType>, compilation_config: &mut CompilationConfig) -> CodeResult<Directive> {
+        Ok(match name.content.to_lowercase().as_str() {
+            "always" => Directive::Always,
+            "never" => Directive::Never,
+            "is_debug" => Directive::OnDebug(true),
+            "isnt_debug" => Directive::OnDebug(false),
+            "on_os" => {
+                let right_fmt = arguments.iter().all(|x| {matches!(x, DirectiveArgType::Identifier { .. })});
+                if !right_fmt {
+                    return Err(CodeError::wrong_directive_arg_type(name, vec![TokenType::Identifier]))
+                }
+                Directive::CompiledOnOs(arguments.iter().map(|x| {match x {
+                    DirectiveArgType::Identifier { value, .. } => value.to_owned(),
+                    _ => unreachable!()
+                }}).collect())
+            },
+            "link_lib" => {
+                let right_fmt = arguments.iter().all(|x| {matches!(x, DirectiveArgType::Identifier { .. } | DirectiveArgType::String { .. })});
+                if !right_fmt {
+                    return Err(CodeError::wrong_directive_arg_type(name, vec![TokenType::Identifier, TokenType::String]))
+                }
+                Directive::LinkLib(arguments.iter().map(|x| {match x {
+                    DirectiveArgType::Identifier { value, .. } => value.to_owned(),
+                    DirectiveArgType::String { value, .. } => value.to_owned(),
+                    _ => unreachable!()
+                }}).collect())
+            },
+            _ => return Err(CodeError::unknown_directive(name))
+        })
+    }
 
-    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>) -> CodeResult<Module<'a>> {
+    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig) -> CodeResult<Module<'a>> {
         let mut global_scope = Namespace::new();
+        let mut should_do = true;
+        
         for branch in ast {
             match branch {
-                AST::FunctionDef { ret, fmode, name, params, body } => {
+                AST::FunctionDef { ret, fmode, name, params, body } if should_do => {
                     self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body)?;
                 }
-                AST::Struct { name, members } => {
+                AST::Struct { name, members } if should_do => {
                     self.visit_struct(name, members, &mut global_scope)?;
                 }
-                _ => unreachable!()
+                // TODO: Add an optional body to directives
+                // TODO: Nested directives
+                AST::Directive { name, arguments } => {
+                    should_do = self.visit_directive(name, arguments, compilation_config)?.handle(compilation_config);
+                }
+                _ if should_do => unreachable!(),
+                _ => {should_do = true}
             }
         }
         Ok(module)

@@ -8,6 +8,7 @@ use lld_rx::LldFlavor;
 use crate::codegen::Codegen;
 use crate::comp_errors::{CodeError, CompilerError};
 use crate::compiler::Compiler;
+use crate::directives::CompilationConfig;
 use crate::filemanager::FileManager;
 use crate::lexer::tokenize;
 use crate::linker::{lld_link, ProdType};
@@ -25,6 +26,7 @@ mod comp_errors;
 mod filemanager;
 mod codeviz;
 mod linker;
+mod directives;
 
 #[derive(Copy, Clone)]
 enum DevDebugLevel {
@@ -198,6 +200,7 @@ impl Display for CompileJobData {
     }
 }
 
+#[derive(Debug)]
 enum MixedError {
     CompilerError(CompilerError),
     CodeError(CodeError)
@@ -215,7 +218,7 @@ impl From<CompilerError> for MixedError {
     }
 }
 
-fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> Result<(), MixedError> {
+fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> Result<CompilationConfig, MixedError> {
     let tokens = tokenize(file_manager.get_content())?;
     println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
     
@@ -235,7 +238,8 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let module = context.create_module(&compile_job_data.module_id);
     let compiler = Compiler::new(&context, &builder, compile_job_data.module_id, file_manager);
 
-    let module = compiler.comp_ast(module, ast)?;
+    let mut compilation_config = CompilationConfig::new(false);
+    let module = compiler.comp_ast(module, ast, &mut compilation_config)?;
     if compile_job_data.dev_debug_level as u32 >= 1 {
         println!("LLVM-Module (pre optimize):");
         module.print_to_stderr();
@@ -259,7 +263,7 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
         CompOutputType::BC => codegen.gen_bc(&module, compile_job_data.output)
     };
     println!("Finished writing to `{file}`!");
-    Ok(())
+    Ok(compilation_config)
 }
 
 fn compile(filepath: String, compile_job_data: CompileJobData) {
@@ -280,6 +284,8 @@ fn compile(filepath: String, compile_job_data: CompileJobData) {
         
         println!("\nAn error has occurred during compilation, terminating compilation.")
     }
+    
+    // TODO: Handle compilation config result
 }
 
 fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
@@ -313,8 +319,11 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
         println!("\nAn error has occurred during compilation, terminating compilation.");
         return
     }
+    
+    let mut compilation_config = x.unwrap();
 
     let mut libs = link_job_data.libs;
+    libs.append(&mut compilation_config.additional_libs);
     // Required libs for windows
     if link_job_data.stdlib {
         libs.push("sila-stdlib-win.lib".to_string());

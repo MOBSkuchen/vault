@@ -68,6 +68,7 @@ pub enum TokenType {
     Relative,
     Malloc,
     Free,
+    Directive,
 
     // Virtual types
     Expression,
@@ -137,7 +138,8 @@ impl TokenType {
             TokenType::Struct => "struct",
             TokenType::Relative => "~",
             TokenType::Malloc => "|>",
-            TokenType::Free => "|<"
+            TokenType::Free => "|<",
+            TokenType::Directive => "#",
         })
             .to_string()
     }
@@ -379,7 +381,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 }
             }
 
-            '(' | ')' | ',' | '.' | '+' | '*' | ':' | ';' | '{' | '}' => {
+            '(' | ')' | ',' | '.' | '+' | '*' | ':' | ';' | '{' | '}' | '#' => {
                 let token_type = match current {
                     '(' => TokenType::LParen,
                     ')' => TokenType::RParen,
@@ -392,6 +394,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     ';' => TokenType::SemiColon,
                     '{' => TokenType::LBrace,
                     '}' => TokenType::RBrace,
+                    '#' => TokenType::Directive,
                     _ => unreachable!(),
                 };
                 scanner.pop();
