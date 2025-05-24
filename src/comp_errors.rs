@@ -3,7 +3,7 @@ use crate::filemanager::FileManager;
 use crate::lexer::{CodePosition, Token, TokenType};
 use colorize_rs::AnsiColor;
 use std::fmt;
-use crate::parser::TypesKind;
+use crate::parser::{format_virtual_type_sig, TypesKind, VirtualDirectiveArgType};
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -62,7 +62,7 @@ pub enum CodeErrorType {
     BreakOutsideLoop,
     NonVoidNoReturn,
     FieldNotFound,
-    WrongDirectiveArgTypes,
+    WrongDirectiveSignature,
     UnknownDirective,
 }
 
@@ -290,13 +290,14 @@ impl CodeError {
         )
     }
 
-    pub fn wrong_directive_arg_type(name: &Token, typ: Vec<TokenType>) -> Self {
+    pub fn wrong_directive_arg_sig(name: &Token, code_position: CodePosition, expected: Vec<VirtualDirectiveArgType>, got: Vec<VirtualDirectiveArgType>) -> Self {
         Self::new(
-            name.code_position,
-            CodeErrorType::WrongDirectiveArgTypes,
-            "Wrong directive args".to_string(),
+            code_position,
+            CodeErrorType::WrongDirectiveSignature,
+            "Wrong directive signature".to_string(),
             Some(format!("For the directive `{name}`")),
-            format!("The directive `{name}` takes arguments of type(s) {}, but you supplied something wrong", typ.iter().map(|x| {format!("`{x}`")}).collect::<Vec<String>>().join(" and ")),
+            format!("The directive `{name}` expected the signature {}, but got {}", 
+                    format_virtual_type_sig(&name.content.to_uppercase(), expected), format_virtual_type_sig(&name.content.to_uppercase(), got)),
             vec![]
         )
     }

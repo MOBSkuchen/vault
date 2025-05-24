@@ -1,3 +1,6 @@
+use crate::comp_errors::{CodeError, CodeResult};
+use crate::parser::{Directive, DirectiveArgType, DirectiveExpr, VirtualDirectiveArgType};
+
 pub struct CompilationConfig {
     debug: bool,
     pub additional_libs: Vec<String>
@@ -9,26 +12,163 @@ impl CompilationConfig {
     }
 }
 
-pub enum Directive {
-    CompiledOnOs(Vec<String>),
-    OnDebug(bool),
-    Always,
-    Never,
-    LinkLib(Vec<String>)
+fn directive_expr_to_virtual_type(directive_expr: &DirectiveExpr) -> VirtualDirectiveArgType {
+    match directive_expr {
+        DirectiveExpr::Literal(lit) => {
+            match lit {
+                DirectiveArgType::Identifier { .. } => VirtualDirectiveArgType::Identifier,
+                DirectiveArgType::IntNumber { .. } => VirtualDirectiveArgType::IntNumber,
+                DirectiveArgType::FloatNumber { .. } => VirtualDirectiveArgType::FloatNumber,
+                DirectiveArgType::String { .. } => VirtualDirectiveArgType::String
+            }
+        }
+        DirectiveExpr::NestedDirective(_) => VirtualDirectiveArgType::Directive,
+    }
 }
 
-impl Directive {
-    pub fn handle(self, compilation_config: &mut CompilationConfig) -> bool {
-        match self { 
-            Directive::CompiledOnOs(systems) => {
-                systems.contains(&std::env::consts::OS.to_string())
+fn check_directive_signature(directive: &Directive, expected: Vec<VirtualDirectiveArgType>) -> CodeResult<()> {
+    let virtuals = directive.arguments.iter().map(|x| {directive_expr_to_virtual_type(x)}).collect::<Vec<VirtualDirectiveArgType>>();
+    if expected.iter().zip(virtuals.iter()).filter(|&(a, b)| a == b).count() != expected.len() {
+        Err(CodeError::wrong_directive_arg_sig(directive.name, directive.code_position, expected, virtuals))
+    } else {Ok(())}
+}
+
+macro_rules! count_idents {
+    () => {0};
+    ($_head:ident $($tail:ident)*) => {1 + count_idents!($($tail)*)};
+}
+
+macro_rules! virtual_directive_args {
+    (
+        directive = $directive:expr,
+        args = [ $( $name:ident : $val:ident ),* $(,)? ],
+        values = $values:expr,
+    ) => {
+            let expected = vec![
+                $( VirtualDirectiveArgType::$val ),*
+            ];
+            check_directive_signature(&$directive, expected)?;
+
+            debug_assert_eq!(count_idents!($($name)*) , $values.len(), "Args and values length mismatch");
+            virtual_directive_args!(@index 0, $values, $( $name : $val ),*);
+    };
+
+    (@index $idx:expr, $values:expr, ) => {}; // end recursion
+
+    (@index $idx:expr, $values:expr, $name:ident : $val:ident, $($rest_name:ident : $rest_val:ident),*) => {
+        virtual_directive_args!(@handle $name, $val, &$values[$idx]);
+        virtual_directive_args!(@index $idx + 1, $values, $($rest_name : $rest_val),*);
+    };
+
+    (@index $idx:expr, $values:expr, $name:ident : $val:ident) => {
+        virtual_directive_args!(@handle $name, $val, &$values[$idx]);
+    };
+
+    (@handle $name:ident, IntNumber, $value:expr) => {
+        let $name = {
+            match $value {
+                DirectiveExpr::Literal(lit) => match lit {
+                    DirectiveArgType::IntNumber { value, .. } => value,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
             }
-            Directive::OnDebug(cool) => {
-                cool == compilation_config.debug
+        };
+    };
+
+    (@handle $name:ident, Identifier, $value:expr) => {
+        let $name = {
+            match $value {
+                DirectiveExpr::Literal(lit) => match lit {
+                    DirectiveArgType::Identifier { value, token: _ } => value,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
             }
-            Directive::Always => true,
-            Directive::LinkLib(mut libs) => { compilation_config.additional_libs.append(&mut libs); true }
-            _ => false
+        };
+    };
+
+    (@handle $name:ident, FloatNumber, $value:expr) => {
+        let $name = {
+            match $value {
+                DirectiveExpr::Literal(lit) => match lit {
+                    DirectiveArgType::FloatNumber { value, .. } => value,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            }
+        };
+    };
+
+    (@handle $name:ident, String, $value:expr) => {
+        let $name = {
+            match $value {
+                DirectiveExpr::Literal(lit) => match lit {
+                    DirectiveArgType::String { value, token: _ } => value,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            }
+        };
+    };
+
+    (@handle $name:ident, Directive, $value:expr) => {
+        let $name = {
+            match $value {
+                DirectiveExpr::NestedDirective(directive) => directive,
+                _ => unreachable!(),
+            }
+        };
+    };
+}
+
+pub fn visit_directive(directive: Directive, compilation_config: &mut CompilationConfig) -> CodeResult<bool> {
+    match directive.name.content.to_uppercase().as_str() {
+        "AND" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ left: Directive, right: Directive ],
+                values = directive.arguments,
+            }
+            let left = visit_directive(*right.clone(), compilation_config)?;
+            let right = visit_directive(*right.clone(), compilation_config)?;
+            return Ok(left && right);
         }
-    }
+        "OR" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ left: Directive, right: Directive ],
+                values = directive.arguments,
+            }
+            let left = visit_directive(*left.clone(), compilation_config)?;
+            let right = visit_directive(*right.clone(), compilation_config)?;
+            return Ok(left || right);
+        }
+        "ALWAYS" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ ],
+                values = directive.arguments,
+            }
+            return Ok(true);
+        }
+        "NEVER" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ ],
+                values = directive.arguments,
+            }
+            return Ok(false);
+        }
+        "NOT" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ expr: Directive ],
+                values = directive.arguments,
+            }
+            let left = visit_directive(*expr.clone(), compilation_config)?;
+            return Ok(!left);
+        }
+        _ => return Err(CodeError::unknown_directive(directive.name)) 
+    };
 }

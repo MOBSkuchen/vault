@@ -152,6 +152,7 @@ impl Display for TokenType {
 }
 
 #[derive(Debug, Clone, Copy, Hash)]
+#[derive(PartialEq)]
 pub struct CodePosition {
     pub idx_start: usize,
     pub idx_end: usize,
@@ -225,6 +226,7 @@ impl CodePosition {
 }
 
 #[derive(Debug, Hash)]
+#[derive(PartialEq)]
 pub struct Token {
     pub content: String,
     pub token_type: TokenType,

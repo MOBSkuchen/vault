@@ -147,8 +147,8 @@ impl<'a> Parser<'a> {
 
                 TokenType::Directive => {
                     self.advance(pointer);
-                    let func = self.parse_directive(pointer)?;
-                    statements.push(func);
+                    let directive = self.parse_directive(pointer)?;
+                    statements.push(AST::Directive(directive));
                 }
 
                 // // Parse import statements
@@ -516,28 +516,72 @@ impl<'a> Parser<'a> {
         }
         Ok(node)
     }
-    
-    fn parse_directive(&self, pointer: &mut usize) -> CodeResult<AST> {
-        let name = self.consume(pointer, TokenType::Identifier, Some("Expected a directive name".to_string()))?;
-        
-        let mut arguments = vec![];
+
+    // Helper function for recursive calls
+    fn parse_directive(&'a self, pointer: &mut usize) -> CodeResult<Directive<'a>> {
+        self.consume(pointer, TokenType::LParen, None)?;
+        let start_pos_idx_recursive = *pointer - 1; // Start from the LParen itself (or the token after #)
+        let name = self.consume(pointer, TokenType::Identifier, Some("Expected a directive name in nested directive".to_string()))?;
+
+        let mut arguments: Vec<DirectiveExpr<'a>> = Vec::new();
 
         loop {
-            let token = self.current(pointer).unwrap();
-            if self.match_token(pointer, TokenType::SemiColon)? {
-                break
-            } else if self.match_token(pointer, TokenType::Identifier)? {
-                arguments.push(DirectiveArgType::Identifier {value: token.content.clone(), token })
-            } else if self.match_token(pointer, TokenType::NumberInt)? {
-                arguments.push(DirectiveArgType::IntNumber {value: token.content.parse().unwrap(), token })
-            } else if self.match_token(pointer, TokenType::NumberFloat)? {
-                arguments.push(DirectiveArgType::FloatNumber {value: token.content.parse().unwrap(), token })
-            } else if self.match_token(pointer, TokenType::String)? {
-                arguments.push(DirectiveArgType::String {value: token.content.parse().unwrap(), token })
-            } else {break}
+            if self.match_token(pointer, TokenType::RParen)? {
+                break;
+            }
+
+            let current_token = self.current(pointer)
+                .ok_or_else(|| CodeError::missing_token_error(self.previous(pointer).unwrap()))?;
+
+            match current_token.token_type {
+                TokenType::LParen => {
+                    let nested_directive = self.parse_directive(pointer)?;
+                    arguments.push(DirectiveExpr::NestedDirective(Box::new(nested_directive)));
+                },
+                TokenType::Identifier => {
+                    self.advance(pointer);
+                    arguments.push(DirectiveExpr::Literal(DirectiveArgType::Identifier {
+                        value: current_token.content.clone(),
+                        token: current_token,
+                    }));
+                },
+                TokenType::NumberInt => {
+                    self.advance(pointer);
+                    let value = current_token.content.parse::<i64>().unwrap();
+                    arguments.push(DirectiveExpr::Literal(DirectiveArgType::IntNumber {
+                        value,
+                        token: current_token,
+                    }));
+                },
+                TokenType::NumberFloat => {
+                    self.advance(pointer);
+                    let value = current_token.content.parse::<f64>().unwrap();
+                    arguments.push(DirectiveExpr::Literal(DirectiveArgType::FloatNumber {
+                        value,
+                        token: current_token,
+                    }));
+                },
+                TokenType::String => {
+                    self.advance(pointer);
+                    arguments.push(DirectiveExpr::Literal(DirectiveArgType::String {
+                        value: current_token.content.clone(),
+                        token: current_token,
+                    }));
+                },
+                _ => {
+                    return Err(CodeError::new_unexpected_token_error(
+                        current_token,
+                        TokenType::Identifier,
+                        Some("Expected an identifier, number, string, or nested directive as an argument".to_string()),
+                    ));
+                }
+            }
         }
-        
-        Ok(AST::Directive {name, arguments})
+        let end_pos = self.previous(pointer).unwrap().code_position;
+        let start_pos_token = self.tokens.get(start_pos_idx_recursive).unwrap().code_position;
+        let code_position = start_pos_token.merge(end_pos);
+
+        Ok(Directive { name, arguments, code_position })
     }
 
     fn parse_primary(&self, pointer: &mut usize) -> CodeResult<Expression> {
@@ -793,12 +837,63 @@ pub struct CondBlock<'a> {
     pub body: Vec<AST<'a>>
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum DirectiveArgType<'a> {
-    IntNumber { value: i64, token: &'a Token},
-    FloatNumber { value: f64, token: &'a Token},
-    String { value: String, token: &'a Token},
-    Identifier { value: String, token: &'a Token}
+    Identifier {
+        value: String,
+        token: &'a Token,
+    },
+    IntNumber {
+        value: i64,
+        token: &'a Token,
+    },
+    FloatNumber {
+        value: f64,
+        token: &'a Token,
+    },
+    String {
+        value: String,
+        token: &'a Token,
+    },
+}
+
+#[derive(Eq, PartialEq)]
+#[derive(Clone)]
+pub enum VirtualDirectiveArgType {
+    Identifier,
+    IntNumber,
+    FloatNumber,
+    String,
+    Directive,
+}
+
+impl Display for VirtualDirectiveArgType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            VirtualDirectiveArgType::Directive => write!(f, "directive"),
+            VirtualDirectiveArgType::Identifier => write!(f, "identifier"),
+            VirtualDirectiveArgType::String => write!(f, "string"),
+            VirtualDirectiveArgType::FloatNumber => write!(f, "float-number"),
+            VirtualDirectiveArgType::IntNumber => write!(f, "int-number"),
+        }
+    }
+}
+
+pub fn format_virtual_type_sig(name: &str, sig: Vec<VirtualDirectiveArgType>) -> String {
+    format!("({name} {})", sig.iter().map(|x| {format!("`{x}`")}).collect::<Vec<String>>().join(" "))
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum DirectiveExpr<'a> {
+    Literal(DirectiveArgType<'a>), // For simple arguments
+    NestedDirective(Box<Directive<'a>>), // For nested directives like (ON_OS windows)
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Directive<'a> {
+    pub name: &'a Token,
+    pub arguments: Vec<DirectiveExpr<'a>>,
+    pub code_position: CodePosition,
 }
 
 #[derive(Debug, Clone)]
@@ -826,5 +921,5 @@ pub enum AST<'a> {
         name: &'a Token,
         members: Vec<(&'a Token, Types<'a>)>
     },
-    Directive { name: &'a Token, arguments: Vec<DirectiveArgType<'a>> }
+    Directive(Directive<'a>)
 }
