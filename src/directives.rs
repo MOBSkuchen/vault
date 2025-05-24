@@ -1,4 +1,4 @@
-use crate::comp_errors::{CodeError, CodeResult};
+use crate::comp_errors::{CodeError, CodeResult, CompilerError};
 use crate::parser::{Directive, DirectiveArgType, DirectiveExpr, VirtualDirectiveArgType};
 
 pub struct CompilationConfig {
@@ -212,6 +212,14 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
             }
             if visit_directive(*cond.clone(), compilation_config)? { visit_directive(*exe.clone(), compilation_config)?; }
             Ok(true)
+        }
+        "ERR" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ msg: String ],
+                values = directive.arguments,
+            }
+            Err(CodeError::error_from_directive(directive.code_position, msg.to_owned()))
         }
         _ => Err(CodeError::unknown_directive(directive.name)) 
     }

@@ -67,7 +67,8 @@ pub enum CodeErrorType {
     BinOpOnNonPrimitiveType,
     IsSigned,
     CanOnlyFreePointers,
-    ConditionsMustBeBools
+    ConditionsMustBeBools,
+    ErrorFromDirective,
 }
 
 #[derive(Debug)]
@@ -268,6 +269,17 @@ impl CodeError {
             "Wrong token, expected other".to_string(),
             Some(format!("help: add `{}` here (or after)", token_type)),
             format!("Expected a `{}` at end the statement", token_type),
+            vec![]
+        )
+    }
+
+    pub fn error_from_directive(code_position: CodePosition, msg: String) -> Self {
+        Self::new(
+            code_position,
+            CodeErrorType::ParserUnexpectedToken,
+            "Directive triggered an error".to_string(),
+            Some("Triggered here".to_string()),
+            msg,
             vec![]
         )
     }
