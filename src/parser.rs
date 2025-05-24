@@ -668,8 +668,8 @@ impl Into<Linkage> for FunctionMode {
         match self {
             FunctionMode::Private => {Linkage::Private}
             FunctionMode::Export => {Linkage::External}
-            FunctionMode::Extern => {Linkage::AvailableExternally}
-            FunctionMode::Default => {Linkage::External}
+            FunctionMode::Extern => {Linkage::External}
+            FunctionMode::Default => {Linkage::Internal}
         }
     }
 }
