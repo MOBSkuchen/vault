@@ -1,5 +1,5 @@
 // mylibrary.c
-#include "sila-stdlib-win.h" // Include our own header
+#include "vault-stdlib-win.h" // Include our own header
 
 /**
  * @brief Prints an integer to the console.

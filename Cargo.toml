@@ -1,12 +1,11 @@
 [package]
-name = "sila"
-description = "EZ low level programming language"
+name = "vault"
+description = "Verified, Atomic, Uncomplicated, Low-level Toolkit"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 inkwell = {version = "0.6.0", features = ["llvm18-1"] }
-rand = "0.9.1"
 annotate-snippets = "0.11.5"
 anstream = "0.6.18"
 colorize-rs = "0.1.2"

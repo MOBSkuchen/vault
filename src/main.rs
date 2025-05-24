@@ -326,7 +326,7 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     libs.append(&mut compilation_config.additional_libs);
     // Required libs for windows
     if link_job_data.stdlib {
-        libs.push("sila-stdlib-win.lib".to_string());
+        libs.push("vault-stdlib-win.lib".to_string());
         libs.push("kernel32.lib".to_string());
         libs.push("ucrt.lib".to_string());
         libs.push("msvcrt.lib".to_string());
