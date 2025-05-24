@@ -9,6 +9,7 @@ use crate::parser::TypesKind;
 pub enum CompilerError {
     FileNotAccessible(String, bool),
     FileCorrupted(String),
+    VerifyFailed(String),
 }
 
 impl CompilerError {
@@ -28,6 +29,9 @@ impl CompilerError {
             }
             CompilerError::FileCorrupted(f) => {
                 println!("Could not read input file `{}`, because the file is corrupted or otherwise not understandable.", f.to_string().bold().underlined())
+            }
+            CompilerError::VerifyFailed(msg) => {
+                print!("Failed to verify produced module, due to a mistake by the compiler:\n{msg}")
             }
         }
     }
@@ -210,7 +214,7 @@ impl CodeError {
     pub fn type_mismatch(pos: &CodePosition, got: &TypesKind, requires: &TypesKind, notes: Vec<String>) -> Self {
         Self::new(
             *pos,
-            CodeErrorType::FunctionArgumentCount,
+            CodeErrorType::TypeMismatch,
             "Type mismatch".to_string(),
             Some(format!("This is of type `{got}`")),
             format!("Expected type `{requires}`, but got type `{got}`"),
@@ -326,7 +330,7 @@ impl CodeError {
     pub fn already_exists(f: bool, symbol: &Token) -> Self {
         Self::new(
             symbol.code_position,
-            CodeErrorType::FunctionOverloaded,
+            CodeErrorType::AlreadyExists,
             "A symbol with the same name already exists".to_string(),
             Some("This".to_string()),
             "Symbols must be unique".to_string(),

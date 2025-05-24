@@ -66,6 +66,8 @@ pub enum TokenType {
     Struct,
     New,
     Relative,
+    Malloc,
+    Free,
 
     // Virtual types
     Expression,
@@ -133,7 +135,9 @@ impl TokenType {
             TokenType::U32 => "u32",
             TokenType::U64 => "u64",
             TokenType::Struct => "struct",
-            TokenType::Relative => "~"
+            TokenType::Relative => "~",
+            TokenType::Malloc => "|>",
+            TokenType::Free => "|<"
         })
             .to_string()
     }
@@ -375,14 +379,13 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 }
             }
 
-            '(' | ')' | ',' | '.' | '+' | '/' | '*' | ':' | ';' | '{' | '}' => {
+            '(' | ')' | ',' | '.' | '+' | '*' | ':' | ';' | '{' | '}' => {
                 let token_type = match current {
                     '(' => TokenType::LParen,
                     ')' => TokenType::RParen,
                     ',' => TokenType::Comma,
                     '.' => TokenType::Dot,
                     '+' => TokenType::Plus,
-                    '/' => TokenType::Slash,
                     '*' => TokenType::Star,
                     '|' => TokenType::Pipe,
                     ':' => TokenType::Colon,
@@ -444,6 +447,18 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     return Ok(scanner.this_as_token(TokenType::As));
                 }
                 return Ok(scanner.this_as_token(TokenType::Equals));
+            }
+
+            '|' => {
+                scanner.pop();
+                if let Some('>') = scanner.peek() {
+                    scanner.pop();
+                    return Ok(scanner.this_as_token(TokenType::Malloc));
+                } else if let Some('<') = scanner.peek() {
+                    scanner.pop();
+                    return Ok(scanner.this_as_token(TokenType::Free));
+                }
+                return Ok(scanner.this_as_token(TokenType::Pipe));
             }
 
             // Identifiers and keywords

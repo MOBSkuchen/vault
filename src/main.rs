@@ -6,7 +6,7 @@ use inkwell::context::Context;
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lld_rx::LldFlavor;
 use crate::codegen::Codegen;
-use crate::comp_errors::CodeResult;
+use crate::comp_errors::{CodeError, CompilerError};
 use crate::compiler::Compiler;
 use crate::filemanager::FileManager;
 use crate::lexer::tokenize;
@@ -198,7 +198,24 @@ impl Display for CompileJobData {
     }
 }
 
-fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> CodeResult<()> {
+enum MixedError {
+    CompilerError(CompilerError),
+    CodeError(CodeError)
+}
+
+impl From<CodeError> for MixedError {
+    fn from(value: CodeError) -> Self {
+        Self::CodeError(value)
+    }
+}
+
+impl From<CompilerError> for MixedError {
+    fn from(value: CompilerError) -> Self {
+        Self::CompilerError(value)
+    }
+}
+
+fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> Result<(), MixedError> {
     let tokens = tokenize(file_manager.get_content())?;
     println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
     
@@ -223,7 +240,12 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
         println!("LLVM-Module (pre optimize):");
         module.print_to_stderr();
     }
-    module.verify().expect("VERIFY");
+    match module.verify() {
+        Ok(_) => {}
+        Err(msg) => {
+            Err(CompilerError::VerifyFailed(msg.to_string()))?
+        }
+    }
     let codegen = Codegen::new(Some(compile_job_data.target_triple), None, None, None);
     codegen.optimize(&module, &compile_job_data.optimization, compile_job_data.dev_debug_level);
     if compile_job_data.dev_debug_level as u32 >= 1 {
@@ -240,30 +262,31 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     Ok(())
 }
 
-fn compile(filepath: String, compile_job_data: CompileJobData) -> bool {
+fn compile(filepath: String, compile_job_data: CompileJobData) {
     let file_manager_r = FileManager::new_from(filepath);
     if let Err(item) = file_manager_r {
         item.output();
-        return true;
+        return;
     }
 
     let file_manager = file_manager_r.unwrap();
 
     let x = compile_job(&file_manager, compile_job_data);
     if let Err(item) = x {
-        item.visualize_error(&file_manager);
+        match item {
+            MixedError::CompilerError(comp_err) => comp_err.output(),
+            MixedError::CodeError(code_err) => code_err.visualize_error(&file_manager),
+        }
         
         println!("\nAn error has occurred during compilation, terminating compilation.")
     }
-    
-    false
 }
 
-fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
+fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     let file_manager_r = FileManager::new_from(filepath);
     if let Err(item) = file_manager_r {
         item.output();
-        return true;
+        return
     }
 
     let file_manager = file_manager_r.unwrap();
@@ -283,9 +306,12 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
 
     let x = compile_job(&file_manager, compile_job_data);
     if let Err(item) = x {
-        item.visualize_error(&file_manager);
+        match item {
+            MixedError::CompilerError(comp_err) => comp_err.output(),
+            MixedError::CodeError(code_err) => code_err.visualize_error(&file_manager),
+        }
         println!("\nAn error has occurred during compilation, terminating compilation.");
-        return false
+        return
     }
 
     let mut libs = link_job_data.libs;
@@ -308,11 +334,9 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) -> bool {
             println!("Finished writing to `{}`", link_job_data.output);
         }
         Err(msg) => {
-            println!("Failed to link, terminating building. Reason:\n{msg}");
+            print!("Failed to link, terminating building. Reason:\n{msg}");
         }
     }
-    
-    false
 }
 
 fn main() {
@@ -401,7 +425,9 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                         .action(clap::ArgAction::SetTrue),
                 )
                 .arg(
-                    Arg::new("link")
+                    Arg::new("libs")
+                        .short('L')
+                        .long("libs")
                         .help("Link in libraries")
                         .value_delimiter(',')
                         .value_hint(ValueHint::AnyPath)
@@ -501,7 +527,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                 output = format!("{output}{}", output_type.to_f_ext(lib));
             }
             let entry = sub.get_one::<&str>("entry").unwrap_or(&"main").to_string();
-            let libs: Vec<String> = if let Some(lbs) = sub.get_many("link") {
+            let libs: Vec<String> = if let Some(lbs) = sub.get_many("libs") {
                 lbs.map(|s: &String| s.to_string()).collect()
             } else {
                 vec![]

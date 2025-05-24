@@ -269,7 +269,7 @@ impl<'ctx> Compiler<'ctx> {
             ExpressionKind::Identifier(name) => {
                 let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).ok_or_else(|| {CodeError::symbol_not_found(name)})?;
                 let real_type = resolve_prim_res(self.convert_type_normal(&def.0), name)?;
-                (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, &name.content).expect("Failed to load")), def.0.clone())
+                (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
             }
             ExpressionKind::IntNumber { value, .. } => {
                 let (hint, vt) = hinted_int(type_hint, self.context);
@@ -466,9 +466,15 @@ impl<'ctx> Compiler<'ctx> {
                 (Box::new(value), *deref_type.clone())
             },
             ExpressionKind::New { name, arguments } => {
-                let virtual_struct_type = TypesKind::Struct {name: name.content.clone() };
-                let struct_type = resolve_prim_res(self.convert_type_normal(&virtual_struct_type), name)?.as_basic_type_enum().into_struct_type();
-                let expected = global_scope.struct_order.get(&name.content).expect("Failed to get struct - which should not happen btw");
+                let virtual_struct_type = TypesKind::Struct { name: name.content.clone() };
+                let struct_type = resolve_prim_res(self.convert_type_normal(&virtual_struct_type), name)?
+                    .as_basic_type_enum()
+                    .into_struct_type();
+
+                let expected = global_scope.struct_order
+                    .get(&name.content)
+                    .expect("Failed to get struct - which should not happen btw");
+
                 let params = arguments.into_iter().enumerate()
                     .map(|(i, expr)| {
                         let cpos = expr.code_position;
@@ -481,9 +487,22 @@ impl<'ctx> Compiler<'ctx> {
                     })
                     .collect::<CodeResult<Vec<(Box<dyn BasicValue>, TypesKind)>>>()?;
 
-                let struct_value = struct_type.const_named_struct(params.into_iter().map(|x| { x.0.as_basic_value_enum() }).collect::<Vec<BasicValueEnum>>().as_ref());
-                (Box::new(struct_value.as_basic_value_enum()), virtual_struct_type)
-            },
+                // Allocate space for the struct
+                let struct_ptr = self.builder.build_alloca(struct_type, "struct_alloc").expect("Failed to struct alloc");
+
+                for (i, (val, _ty)) in params.into_iter().enumerate() {
+                    let gep = unsafe {
+                        self.builder.build_struct_gep(struct_type, struct_ptr, i as u32, &format!("field_{i}"))
+                            .expect("GEP failed - invalid field index?")
+                    };
+                    self.builder.build_store(gep, val.as_basic_value_enum()).expect("Failed store");
+                }
+
+                // Load the struct value (optional: you can return the pointer if that fits your ABI)
+                let loaded_struct = self.builder.build_load(struct_type, struct_ptr, "load_struct").expect("Failed to load struct");
+
+                (Box::new(loaded_struct), virtual_struct_type)
+            }
             ExpressionKind::Access { parent, child, ptr } => {
                 let parent_cpos = parent.code_position;
                 let (parent_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
@@ -515,6 +534,21 @@ impl<'ctx> Compiler<'ctx> {
                 } else {
                     return Err(CodeError::field_not_found(child, stct_name))
                 }
+            },
+            ExpressionKind::Malloc { amount } => {
+                let (value, typ) = self.visit_expr(function, global_scope, *amount, Some(&TypesKind::U32), false)?;
+                if is_type_signed(&typ) { panic!("Must be uint") }
+                let ptr = self.builder.build_array_malloc(self.context.i8_type(), value.as_basic_value_enum().into_int_value(), "").expect("Failed to build malloc");
+                (Box::new(ptr.as_basic_value_enum()), TypesKind::Ptr(Box::new(TypesKind::U8)))
+            }
+            ExpressionKind::Free { var } => {
+                // TODO: Maybe make this a statement?
+                let (value, typ) = self.visit_expr(function, global_scope, *var, Some(&TypesKind::Pointer), false)?;
+                if !matches!(typ, TypesKind::Ptr(_) | TypesKind::Pointer) {
+                    panic!("Can only free pointers")
+                }
+                self.builder.build_free(value.as_basic_value_enum().into_pointer_value()).expect("Failed to free");
+                (value, typ)
             },
         })
     }

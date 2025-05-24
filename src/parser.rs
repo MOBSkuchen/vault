@@ -537,6 +537,16 @@ impl<'a> Parser<'a> {
                         var: self.consume(pointer, TokenType::Identifier, Some("`*` is a deref-token, which must be followed by a variable to a pointer".to_string()))? }
                         , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
                 }
+                TokenType::Malloc => {
+                    Ok(Expression {expression: ExpressionKind::Malloc {
+                        amount: Box::new(self.parse_expression(pointer)?) }
+                        , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
+                }
+                TokenType::Free => {
+                    Ok(Expression {expression: ExpressionKind::Free {
+                        var: Box::new(self.parse_expression(pointer)?) }
+                        , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
+                }
                 TokenType::New => {
                     let start = token.code_position;
                     let name = self.consume(pointer, TokenType::Identifier, None)?;
@@ -742,6 +752,8 @@ pub enum ExpressionKind<'a> {
     FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
     Reference { var: &'a Token },
     Dereference { var: &'a Token },
+    Malloc { amount: Box<Expression<'a>> },
+    Free { var: Box<Expression<'a>> },
     New { name: & 'a Token, arguments: Vec<Expression<'a>> },
     Access { parent: Box<Expression<'a>>, child: &'a Token, ptr: bool }
 }
