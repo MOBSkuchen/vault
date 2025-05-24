@@ -57,6 +57,7 @@ pub enum CodeErrorType {
     ToplevelStatement,
     BreakOutsideLoop,
     NonVoidNoReturn,
+    FieldNotFound,
 }
 
 #[derive(Debug)]
@@ -267,7 +268,18 @@ impl CodeError {
             CodeErrorType::SymbolNotFound,
             "Symbol was not found".to_string(),
             Some("This symbol".to_string()),
-            format!("The name `{}` is referenced here, but can't be resolved", token.content),
+            format!("The name `{token}` is referenced here, but can't be resolved"),
+            vec![]
+        )
+    }
+
+    pub fn field_not_found(token: &Token, struct_name: &String) -> Self {
+        Self::new(
+            token.code_position,
+            CodeErrorType::FieldNotFound,
+            "Field not found".to_string(),
+            Some("This field".to_string()),
+            format!("The field `{token}` of struct {struct_name} is referenced here, but the struct has no such field"),
             vec![]
         )
     }

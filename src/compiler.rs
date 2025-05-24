@@ -168,7 +168,7 @@ impl<'ctx> Compiler<'ctx> {
                 self.context.get_struct_type(name).map(|t| t.fn_type(&param_types, false)).ok_or({PrimitiveErrors::UnknownStruct})
             },
             TypesKind::Function { ret,params } => {
-                Ok(self.convert_type_function(&*ret.to_owned(), params.iter().map(|x| { x.to_owned() }).collect())?.ptr_type(AddressSpace::default()).fn_type(&param_types, false))
+                Ok(self.convert_type_function(&ret.to_owned(), params.iter().map(|x| { x.to_owned() }).collect())?.ptr_type(AddressSpace::default()).fn_type(&param_types, false))
             },
             TypesKind::Ptr(ptr) => {
                 Ok(self.convert_type_normal(ptr)?.ptr_type(AddressSpace::default()).fn_type(&param_types, false))
@@ -250,6 +250,16 @@ impl<'ctx> Compiler<'ctx> {
     
     fn null(&self) -> IntValue<'ctx> {
         self.context.i32_type().const_zero()
+    }
+    
+    fn struct_access_type_mismatch_error(parent_cpos: &CodePosition, parent_type: &TypesKind) -> CodeError {
+        let mut notes = vec!["Can only access elements from struct (pointers)".to_string()];
+        if matches!(parent_type, TypesKind::Struct { .. }) {
+            notes.push("As you are trying to access a field from a struct value, you might have forgotten to reference it?".to_string());
+            CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Ptr(Box::new(parent_type.clone())), notes)
+        } else {
+            CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Struct { name: "struct".to_string() }, notes)
+        }
     }
     
 
@@ -338,7 +348,7 @@ impl<'ctx> Compiler<'ctx> {
                                         .map(|v| v.as_basic_value_enum())
                                         .ok()
                                 } else {
-                                    return Ok((Box::new(value), old_type));
+                                    return Ok((Box::new(value), new_type.kind));
                                 }
                             }
                             TypesKind::F32 | TypesKind::F64 => {
@@ -473,6 +483,38 @@ impl<'ctx> Compiler<'ctx> {
 
                 let struct_value = struct_type.const_named_struct(params.into_iter().map(|x| { x.0.as_basic_value_enum() }).collect::<Vec<BasicValueEnum>>().as_ref());
                 (Box::new(struct_value.as_basic_value_enum()), virtual_struct_type)
+            },
+            ExpressionKind::Access { parent, child, ptr } => {
+                let parent_cpos = parent.code_position;
+                let (parent_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
+                let inner_struct_type;
+                let (stct, stct_name) = match &parent_type {
+                    TypesKind::Ptr(ptr) => {
+                        match ptr.deref() {
+                            TypesKind::Struct { name } => {
+                                inner_struct_type = ptr;
+                                (global_scope.struct_order.get(name).unwrap(), name)
+                            }
+                            _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type))
+                        }
+                    }
+                    _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type))
+                };
+                if let Some(item) = stct.iter().position(|x1| {x1.0 == child.content}) {
+                    let (_, field_type) = &stct[item];
+                    let llvm_struct_type = resolve_prim_res(self.convert_type_normal(inner_struct_type), child)?.as_basic_type_enum();
+                    let val_ptr = self.builder.build_struct_gep(llvm_struct_type, parent_value.as_basic_value_enum().into_pointer_value(), item as u32, "").expect("Failed to GEP struct item ptr");
+                    let ret_typ = if ptr {TypesKind::Ptr(Box::new(field_type.clone()))} else { field_type.clone()};
+                    if ptr {
+                        (Box::new(val_ptr), ret_typ)
+                    } else {
+                        let llvm_field_type = resolve_prim_res(self.convert_type_normal(field_type), child)?.as_basic_type_enum();
+                        let loaded = self.builder.build_load(llvm_field_type, val_ptr, "").expect("Failed to load struct access ptr");
+                        (Box::new(loaded), ret_typ)
+                    }
+                } else {
+                    return Err(CodeError::field_not_found(child, stct_name))
+                }
             },
         })
     }
@@ -753,6 +795,8 @@ impl<'ctx> Compiler<'ctx> {
             
             if !returns && (return_type.kind != TypesKind::Void) {
                 return Err(CodeError::non_void_no_ret_func(name, &return_type.kind))
+            } else if !returns && (return_type.kind == TypesKind::Void) {
+                self.builder.build_return(None).expect("Failed to empty attach return");
             }
         }
         

@@ -491,14 +491,34 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.peek(pointer) {
             match token.token_type {
-                TokenType::Star | TokenType::Slash | TokenType::DoubleEquals | TokenType::Lesser | TokenType::Greater | TokenType::GreaterEquals | TokenType::LesserEquals | TokenType::And | TokenType::Or=> {
+                TokenType::Star | TokenType::Slash | TokenType::DoubleEquals | TokenType::Lesser | TokenType::Greater |
+                TokenType::GreaterEquals | TokenType::LesserEquals | TokenType::And | TokenType::Or  => {
                     let op = self.advance(pointer).unwrap();
                     let right = self.parse_primary(pointer)?;
                     let cpos = node.code_position.merge(right.code_position);
                     node = (ExpressionKind::BinaryOp { lhs: Box::new(node), op: (op, op.token_type.to_binop().unwrap()), rhs: Box::new(right) }).into_expression(cpos);
                 }
+                /*
+                else if next.token_type == TokenType::Dot {
+                    self.consume(pointer, TokenType::Dot, None)?;
+                    let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
+                    return Ok(Expression { expression : ExpressionKind::Access {parent: name_tok, child, ptr: false}, code_position: name_tok.code_position.merge(child.code_position)})
+                } else if next.token_type == TokenType::Relative {
+                    self.consume(pointer, TokenType::Relative, None)?;
+                    let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
+                    return Ok(Expression { expression : ExpressionKind::Access {parent: name_tok, child, ptr: true}, code_position: name_tok.code_position.merge(child.code_position)})
+                }
+                 */
                 _ => break,
             }
+        }
+        let cpos = node.code_position;
+        if self.match_token(pointer, TokenType::Dot)? {
+            let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
+            return Ok(Expression { expression : ExpressionKind::Access {parent: Box::new(node), child, ptr: false}, code_position: cpos.merge(child.code_position)})
+        } else if self.match_token(pointer, TokenType::Relative)? {
+            let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
+            return Ok(Expression { expression : ExpressionKind::Access {parent: Box::new(node), child, ptr: true}, code_position: cpos.merge(child.code_position)})
         }
         Ok(node)
     }
@@ -516,15 +536,6 @@ impl<'a> Parser<'a> {
                     Ok(Expression {expression: ExpressionKind::Dereference {
                         var: self.consume(pointer, TokenType::Identifier, Some("`*` is a deref-token, which must be followed by a variable to a pointer".to_string()))? }
                         , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
-                }
-                TokenType::Identifier => {
-                    let name_tok = token;
-                    if let Some(next) = self.peek(pointer) {
-                        if next.token_type == TokenType::LParen {
-                            return self.parse_function_call(pointer, name_tok);
-                        }
-                    }
-                    Ok(Expression { expression: ExpressionKind::Identifier(name_tok), code_position: name_tok.code_position })
                 }
                 TokenType::New => {
                     let start = token.code_position;
@@ -544,6 +555,15 @@ impl<'a> Parser<'a> {
                     self.consume(pointer, TokenType::RParen, Some("Expected `)` after arguments".to_string()))?;
 
                     Ok((ExpressionKind::New {name, arguments}).into_expression(start.merge(self.tokens[*pointer - 1].code_position)))
+                }
+                TokenType::Identifier => {
+                    let name_tok = token;
+                    if let Some(next) = self.peek(pointer) {
+                        if next.token_type == TokenType::LParen {
+                            return self.parse_function_call(pointer, name_tok);
+                        }
+                    }
+                    Ok(Expression { expression: ExpressionKind::Identifier(name_tok), code_position: name_tok.code_position })
                 }
                 TokenType::NumberInt => {
                     let val = token.content.parse().unwrap();
@@ -723,6 +743,7 @@ pub enum ExpressionKind<'a> {
     Reference { var: &'a Token },
     Dereference { var: &'a Token },
     New { name: & 'a Token, arguments: Vec<Expression<'a>> },
+    Access { parent: Box<Expression<'a>>, child: &'a Token, ptr: bool }
 }
 
 impl<'a> ExpressionKind<'a> {

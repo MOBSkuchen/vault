@@ -65,6 +65,7 @@ pub enum TokenType {
     Bool,
     Struct,
     New,
+    Relative,
 
     // Virtual types
     Expression,
@@ -132,6 +133,7 @@ impl TokenType {
             TokenType::U32 => "u32",
             TokenType::U64 => "u64",
             TokenType::Struct => "struct",
+            TokenType::Relative => "~"
         })
             .to_string()
     }
@@ -403,6 +405,10 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
             '-' => {
                 scanner.pop();
                 return Ok(scanner.this_as_token(TokenType::Minus));
+            }
+            '~' => {
+                scanner.pop();
+                return Ok(scanner.this_as_token(TokenType::Relative));
             }
             '>' => {
                 scanner.pop();
