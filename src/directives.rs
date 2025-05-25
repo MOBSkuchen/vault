@@ -225,6 +225,16 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
             let ret = if visit_directive(*cond.clone(), compilation_config, file_manager)? { visit_directive(*exe.clone(), compilation_config, file_manager)? } else { false };
             Ok(if d.ends_with("I") { true } else { ret })
         }
+        // IF ELSE && IF ELSE IMMUTABLE
+        "IFE" | "IFEI" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ cond: Directive, exe: Directive, otherwise: Directive ],
+                values = directive.arguments,
+            }
+            let ret = if visit_directive(*cond.clone(), compilation_config, file_manager)? { visit_directive(*exe.clone(), compilation_config, file_manager)? } else { visit_directive(*otherwise.clone(), compilation_config, file_manager)? };
+            Ok(if d.ends_with("I") { true } else { ret })
+        }
         "ERR" => {
             virtual_directive_args! {
                 directive = directive,

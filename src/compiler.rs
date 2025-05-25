@@ -1,18 +1,25 @@
 use std::collections::HashMap;
 use std::ops::Deref;
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
+use std::ptr;
+use inkwell::{AddressSpace, Either, FloatPredicate, IntPredicate};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder};
 use inkwell::context::Context;
+use inkwell::llvm_sys::core::LLVMIsAFunction;
+use inkwell::llvm_sys::LLVMValue;
+use inkwell::llvm_sys::prelude::{LLVMModuleRef, LLVMTypeRef, LLVMValueRef};
+use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::Module;
-use inkwell::types::{AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType, StructType};
-use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
+use inkwell::types::{AnyTypeEnum, AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType, StructType};
+use inkwell::values::{AnyValueEnum, AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
+use lld_rx::link;
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
+use crate::DevDebugLevel;
 use crate::directives::{visit_directive, CompilationConfig};
 use crate::filemanager::FileManager;
-use crate::lexer::{CodePosition, Token};
-use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, ModuleAccessVariant, Types, TypesKind, AST};
+use crate::lexer::{tokenize, CodePosition, Token};
+use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, ModuleAccessVariant, Parser, Types, TypesKind, AST};
 
 fn is_type_signed(typ: &TypesKind) -> bool {
     !matches!(typ, TypesKind::U32 | TypesKind::U64 | TypesKind::U8 | TypesKind::Bool)
@@ -46,8 +53,8 @@ pub struct Function<'ctx> {
     compiler: &'ctx Compiler<'ctx>,
     function_value: FunctionValue<'ctx>,
     ret: TypesKind,
-    function_scope: Namespace<'ctx>,
-    name: String,
+    function_scope: Namespace,
+    name: String
 }
 
 impl<'ctx> Function<'ctx> {
@@ -62,24 +69,58 @@ impl<'ctx> Function<'ctx> {
     }
 }
 
-#[derive(Debug)]
-pub struct Namespace<'n> {
-    pub definitions: HashMap<String, (TypesKind, PointerValue<'n>)>,
-    pub structs: HashMap<String, StructType<'n>>,
-    pub functions: HashMap<String, (FunctionValue<'n>, bool)>,
+#[derive(Debug, Clone)]
+pub struct Namespace {
+    pub definitions: HashMap<String, (TypesKind, LLVMValueRef)>,
+    pub structs: HashMap<String, LLVMTypeRef>,
+    pub functions: HashMap<String, (LLVMValueRef, bool)>,
     pub struct_order: HashMap<String, Vec<(String, TypesKind)>>,
-    pub modules: HashMap<String, &'n Namespace<'n>>
+    pub modules: HashMap<String, Namespace>
+}
+
+fn llvm_value_ref_to_ptr_value<'a>(llvmvalue_ref: LLVMValueRef) -> PointerValue<'a> {
+    println!("PTR_VALUE FUNC {:#?}", !unsafe { LLVMIsAFunction(llvmvalue_ref).is_null() });
+    unsafe { println!("PTR_VALUE: {}", AnyValueEnum::new(llvmvalue_ref)); }
+    unsafe { PointerValue::new(llvmvalue_ref) }
+}
+
+fn llvm_value_ref_to_ptr_value_or_function_value<'a>(llvmvalue_ref: LLVMValueRef) -> Either<FunctionValue<'a>, PointerValue<'a>> {
+    let is_func = !unsafe { LLVMIsAFunction(llvmvalue_ref).is_null() };
+    if is_func { 
+        Either::Left(llvm_value_ref_to_function_value(llvmvalue_ref))
+    } else {
+        Either::Right(llvm_value_ref_to_ptr_value(llvmvalue_ref))
+    }
+}
+
+fn llvm_value_ref_to_ptr_either_way<'a>(llvmvalue_ref: LLVMValueRef) -> PointerValue<'a> {
+    let either = llvm_value_ref_to_ptr_value_or_function_value(llvmvalue_ref);
+    match either {
+        Either::Left(f) => {
+            unsafe { PointerValue::new(f.as_value_ref()) }
+        }
+        Either::Right(p) => p
+    }
+}
+
+fn llvm_value_ref_to_function_value<'a>(llvmvalue_ref: LLVMValueRef) -> FunctionValue<'a> {
+    println!("FUNCTION_VALUE {:#?}", llvmvalue_ref);
+    unsafe { println!("FUNCTION_VALUE {}", AnyValueEnum::new(llvmvalue_ref)); }
+    unsafe { FunctionValue::new(llvmvalue_ref).expect("Not a function value") }
+}
+
+fn llvm_type_ref_to_struct_type<'a>(llvmtype_ref: LLVMTypeRef) -> StructType<'a> {
+    println!("STRUCT_TYPE {:#?}", llvmtype_ref);
+    unsafe { println!("STRUCT_TYPE {}", AnyTypeEnum::new(llvmtype_ref)); }
+    unsafe { StructType::new(llvmtype_ref) }
 }
 
 // Check local and global scope
-fn check_ls_gs_defs<'a>(name: &str, ls: &'a Namespace<'a>, gs: &'a Namespace<'a>) -> Option<&'a (TypesKind, PointerValue<'a>)> {
-    ls.definitions.get(name).or(gs.definitions.get(name))
-}
-fn check_ls_gs_func<'a>(name: &str, ls: &'a Namespace<'a>, gs: &'a Namespace<'a>) -> Option<&'a (FunctionValue<'a>, bool)> {
-    ls.functions.get(name).or(gs.functions.get(name))
+fn check_ls_gs_defs<'a>(name: &str, ls: &'a Namespace, gs: &'a Namespace) -> Option<(TypesKind, PointerValue<'a>)> {
+    ls.definitions.get(name).or(gs.definitions.get(name)).map(|t| (t.0.clone(), llvm_value_ref_to_ptr_value(t.1)))
 }
 
-impl<'ns> Namespace<'ns> {
+impl Namespace {
     fn new() -> Self {
         Self { definitions: HashMap::new(), functions: HashMap::new(), struct_order: HashMap::new(), modules: HashMap::new(), structs: HashMap::new() }
     }
@@ -114,7 +155,7 @@ impl<'ctx> Compiler<'ctx> {
                 TypesKind::Void => Err(CodeError::void_type(cpos)),
                 TypesKind::Struct { name } => {
                     let holder_scope = self.get_holder_scope(name, None, global_scope)?;
-                    let x = holder_scope.structs.get(&name.last_name().unwrap()).map(|t| t.as_basic_type_enum());
+                    let x = holder_scope.structs.get(&name.last_name().unwrap()).map(|t| llvm_type_ref_to_struct_type(t.clone()).as_basic_type_enum());
                     Ok(x.unwrap().as_type_ref())
                 }
                 TypesKind::Function { ret, params } => {
@@ -146,7 +187,7 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::Void => Ok(self.context.void_type().fn_type(&param_types, false).as_type_ref()),
             TypesKind::Struct { name } => {
                 let holder_scope = self.get_holder_scope(name, None, global_scope)?;
-                let x = holder_scope.structs.get(&name.last_name().unwrap()).map(|t| Box::new(t.as_basic_type_enum()));
+                let x = holder_scope.structs.get(&name.last_name().unwrap()).map(|t| Box::new(llvm_type_ref_to_struct_type(t.clone()).as_basic_type_enum()));
                 Ok(x.unwrap().fn_type(&param_types, false).to_owned().as_type_ref())
             },
             TypesKind::Function { ret,params } => {
@@ -246,7 +287,7 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    fn resolve_mav_as_module<'a>(&self, mav: &ModuleAccessVariant, scope: &Namespace<'a>) -> CodeResult<&'a Namespace<'a>> {
+    fn resolve_mav_as_module<'a>(&self, mav: &ModuleAccessVariant, scope: &'a Namespace) -> CodeResult<&'a Namespace> {
         match mav {
             ModuleAccessVariant::Base { name, cpos } => {
                 Ok(scope.modules.get(name).ok_or_else(|| { CodeError::prim_module_not_found(name, *cpos) })?)
@@ -259,10 +300,10 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    fn resolve_mav<'a>(&self, mav: &ModuleAccessVariant, ls: Option<&'a Namespace<'a>>, scope: &'a Namespace<'a>) -> CodeResult<&'a (TypesKind, PointerValue<'a>)> {
+    fn resolve_mav<'a>(&self, mav: &ModuleAccessVariant, ls: Option<&'a Namespace>, scope: &'a Namespace) -> CodeResult<(TypesKind, PointerValue<'a>)> {
         match mav {
             ModuleAccessVariant::Base { name, cpos } => {
-                Ok(ls.and_then(|n1| {n1.definitions.get(name)}).or_else(|| { scope.definitions.get(name) })
+                Ok(ls.and_then(|n1| {n1.definitions.get(name)}).or_else(|| { scope.definitions.get(name) }).map(|t| (t.0.clone(), llvm_value_ref_to_ptr_either_way(t.1)))
                     .ok_or_else(|| { CodeError::prim_symbol_not_found(name, *cpos) })?)
             }
             ModuleAccessVariant::Double(a, b) => {
@@ -272,7 +313,7 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    fn get_holder_scope<'a>(&self, mav: &ModuleAccessVariant, ls: Option<&'a Namespace<'a>>, scope: &'a Namespace<'a>) -> CodeResult<&'a Namespace<'a>> {
+    fn get_holder_scope<'a>(&self, mav: &ModuleAccessVariant, ls: Option<&'a Namespace>, scope: &'a Namespace) -> CodeResult<&'a Namespace> {
         match mav {
             ModuleAccessVariant::Base { name, cpos } => {
                 Ok(ls.and_then(|n1| {if n1.definitions.contains_key(name) || n1.structs.contains_key(name) {Some(n1)} else {None}}).or_else(|| {if scope.definitions.contains_key(name) || scope.structs.contains_key(name) {Some(scope)} else {None}})
@@ -285,13 +326,13 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    fn visit_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace<'_>, expr: Expression, 
+    fn visit_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace, expr: Expression, 
                       type_hint: Option<&TypesKind>, must_use: bool) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
         Ok(match expr.expression {
             ExpressionKind::ModuleAccess(mav) => {
                 let def = self.resolve_mav(&mav, Some(&function.function_scope), global_scope)?;
                 let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
-                (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
+                (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0)
             }
             ExpressionKind::IntNumber { value, .. } => {
                 let (hint, vt) = hinted_int(type_hint, self.context);
@@ -335,8 +376,8 @@ impl<'ctx> Compiler<'ctx> {
                         // Call function, if it does not return a value (Void function) return null
                         // In that case the return value will NOT be used, because of other Void checks
                         let holder_scope = self.get_holder_scope(&mav, Some(&function.function_scope), global_scope)?;
-                        let call = self.builder.build_call(holder_scope.functions.get(&mav.last_name().unwrap())
-                            .expect("Failed to get function - which should exist btw").0, h_args.as_slice(), "").expect("Failed to load");
+                        let call = self.builder.build_call(llvm_value_ref_to_function_value(holder_scope.functions.get(&mav.last_name().unwrap())
+                            .expect("Failed to get function - which should exist btw").0), h_args.as_slice(), "").expect("Failed to load");
                         (Box::new(call.try_as_basic_value().left_or(self.null().as_basic_value_enum())), ret.as_ref().clone())
                     }
                     _ => Err(CodeError::symbol_not_a_function(&mav))?
@@ -462,7 +503,7 @@ impl<'ctx> Compiler<'ctx> {
                 let def = check_ls_gs_defs(&var.content, &function.function_scope, global_scope).ok_or_else(|| {
                     CodeError::symbol_not_found(var)
                 })?;
-                (Box::new(def.1.as_basic_value_enum()), TypesKind::Ptr(Box::new(def.0.clone())))
+                (Box::new(def.1.as_basic_value_enum()), TypesKind::Ptr(Box::new(def.0)))
             }
             ExpressionKind::Dereference { var } => {
                 let def = check_ls_gs_defs(&var.content, &function.function_scope, global_scope).ok_or_else(|| {
@@ -580,7 +621,7 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
+    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace, after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
         let mut inside_loop = after_block.is_some();
         let mut returns = false;
         // Returns: inside_loop, returns
@@ -606,7 +647,7 @@ impl<'ctx> Compiler<'ctx> {
                     let typ = typ.unwrap();
                     (typ.kind.clone(), self.builder.build_alloca(self.convert_type_normal(&typ.kind, global_scope, typ_tok)?.as_basic_type_enum(), "").expect("Can not allocate for var-declare"))
                 };
-                function.function_scope.definitions.insert(name.content.clone(), val);
+                function.function_scope.definitions.insert(name.content.clone(), (val.0, val.1.as_value_ref()));
             }
             AST::VariableReassign { name, value } => {
                 let holder_scope = self.get_holder_scope(&name, Some(&function.function_scope), global_scope)?;
@@ -614,7 +655,8 @@ impl<'ctx> Compiler<'ctx> {
                 let (typ, ptr) = holder_scope.definitions.get(&name.last_name().unwrap()).ok_or_else(|| {CodeError::prim_symbol_not_found(&name.name(), name.ensured_compute_codeposition())})?;
                 let (data, got_type) = self.visit_expr(function, global_scope, value, Some(typ), true)?;
                 if got_type != *typ { return Err(CodeError::type_mismatch(cpos, &got_type, typ, vec![format!("This is because `{}` was originally declared as {typ}", name.name())])) }
-                self.builder.build_store(*ptr, data.as_basic_value_enum()).expect("Failed to store value of variable define");
+                println!("BUILD_STORE {:#?}", ptr);
+                self.builder.build_store(llvm_value_ref_to_ptr_value(*ptr), data.as_basic_value_enum()).expect("Failed to store value of variable define");
             }
             AST::Expression { expr } => { 
                 self.visit_expr(function, global_scope, expr, None, false)?;
@@ -813,12 +855,13 @@ impl<'ctx> Compiler<'ctx> {
             AST::Continue(tok) => tok.code_position,
             AST::Struct { name, .. } => name.code_position,
             AST::Directive(d) => d.code_position,
+            AST::Import { module, .. } => module.code_position,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn visit_function_def<'a>(&'a self, module: &Module<'a>, name: &Token, fmode: FunctionMode, 
-                                         return_type: Types, params: Vec<(&Token, Types)>, global_scope: &mut Namespace<'a>,
+                                         return_type: Types, params: Vec<(&Token, Types)>, global_scope: &mut Namespace,
                                          body: Option<Vec<AST>>) -> CodeResult<()>
     {
         let fn_type = self.convert_type_function(&return_type.kind, params.iter().map(|x| {x.1.kind.clone()}).collect(), global_scope, name.code_position)?;
@@ -828,13 +871,15 @@ impl<'ctx> Compiler<'ctx> {
                 return Err(CodeError::already_exists(true, name))
             }
         }
-        
+        println!("Adding func");
         let function_value = module.add_function(&name.content, fn_type, Some(fmode.into()));
         let mut function = Function::new(self, function_value, return_type.kind.clone(), name.content.clone());
 
-        global_scope.functions.insert(name.content.clone(), (function_value, body.is_some()));
+        global_scope.functions.insert(name.content.clone(), (function_value.as_value_ref(), body.is_some()));
         global_scope.definitions.insert(name.content.clone(), (TypesKind::Function {ret: Box::from(return_type.kind.clone()), 
-            params: params.iter().map(|x| {x.1.kind.clone()}).collect() }, unsafe { PointerValue::new(function_value.as_value_ref()) }));
+            params: params.iter().map(|x| {x.1.kind.clone()}).collect() }, unsafe { PointerValue::new(function_value.as_value_ref()) }.as_value_ref()));
+
+        println!("Added func");
         
         let mut inside_loop = false;
         let mut returns = false;
@@ -846,7 +891,7 @@ impl<'ctx> Compiler<'ctx> {
                 let value = function.function_value.get_nth_param(i as u32).unwrap();
                 let ptr = self.builder.build_alloca(value.get_type(), "").expect("Failed to build alloca");
                 self.builder.build_store(ptr, value).expect("Failed to store param");
-                function.function_scope.definitions.insert(param.0.content.clone(), (param.1.kind.clone(), ptr));
+                function.function_scope.definitions.insert(param.0.content.clone(), (param.1.kind.clone(), ptr.as_value_ref()));
             }
             
             let length = body.len();
@@ -872,7 +917,7 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
     
-    fn visit_struct<'a>(&self, name: &'a Token, members: Vec<(&'a Token, Types)>, global_scope: &'a mut Namespace<'ctx>) -> CodeResult<()> {
+    fn visit_struct<'a>(&self, name: &'a Token, members: Vec<(&'a Token, Types)>, global_scope: &'a mut Namespace) -> CodeResult<()> {
         let real_membs = members.iter()
             .map(|x| {
                 self.convert_type_normal(&x.1.kind, global_scope, x.1.cpos)
@@ -882,7 +927,7 @@ impl<'ctx> Compiler<'ctx> {
         global_scope.struct_order.insert(name.content.to_owned(), asoc);
         let typ = self.context.opaque_struct_type(&name.content);
         typ.set_body(real_membs.as_slice(), false);
-        global_scope.structs.insert(name.content.clone(), typ);
+        global_scope.structs.insert(name.content.clone(), typ.as_type_ref());
         Ok(())
     }
     
@@ -890,7 +935,7 @@ impl<'ctx> Compiler<'ctx> {
         print_code_warn(code_warning, self.file_manager);
     }
 
-    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<Module<'a>> {
+    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<(Module<'a>, Namespace)> {
         let mut global_scope = Namespace::new();
         let mut should_do = true;
         
@@ -906,10 +951,85 @@ impl<'ctx> Compiler<'ctx> {
                 AST::Directive(directive) => {
                     should_do = visit_directive(directive, compilation_config, file_manager)?;
                 }
+                AST::Import { module: md, path } if should_do => {
+                    let dev_debug_level = DevDebugLevel::Null;
+                    
+                    let path = if let Some(p) = path { p.content.clone() } else { format!("{}.sl", md.content) };
+                    let mod_file_manager = FileManager::new_from(path).expect("TODO: Error handling here");
+
+                    let module_id = md.content.clone();
+
+                    let tokens = tokenize(mod_file_manager.get_content())?;
+                    println!("Compiling `{}` with profile:\n.......", mod_file_manager.input_file);
+
+                    if dev_debug_level as u32 >= 2 {
+                        println!("Parsed Tokens:\n{:#?}", tokens);
+                    }
+
+                    let parser = Parser::new(tokens, &mod_file_manager);
+                    let ast = parser.parse(&mut 0)?;
+
+                    if dev_debug_level as u32 >= 2 {
+                        println!("Parsed AST:\n{:#?}", ast);
+                    }
+                    
+                    let context = Context::create();
+                    let builder = context.create_builder();
+                    let new_module = context.create_module(&module_id);
+                    let compiler = Compiler::new(&context, &builder, module_id.clone(), &mod_file_manager);
+                    let (linkable, scope) = compiler.comp_ast(new_module, ast, compilation_config, file_manager)?;
+                    
+                    let ir_mod = self.context.create_module_from_ir(MemoryBuffer::create_from_memory_range("
+; ModuleID = 'other'
+source_filename = \"other\"
+
+declare void @print_int(i32 %0)
+
+declare void @println(ptr %0)
+
+declare void @print(ptr %0)
+
+declare void @ptr_input(ptr %0, i32 %1)
+
+declare i32 @str_to_int(ptr %0, ptr %1)".as_ref(), ""));
+
+                    // // let modu = unsafe{ Module::new(linkable) };
+                    // // println!("{:?}", modu.to_string());
+                    // 
+                    module.link_in_module( ir_mod.unwrap() ).expect("Failed to link module");
+                    // println!("Linking modules");
+                    // let suc = llvm_link2_modules(&module, &linkable).expect("Failed to link");
+                    // linkable.print_to_stderr();
+                    // println!("Linked modules, success: {suc}");
+                    
+                    global_scope.modules.insert(module_id, scope);
+                }
                 _ if should_do => unreachable!(),
                 _ => {should_do = true}
             }
         }
-        Ok(module)
+        Ok((module, global_scope))
     }
+
+    pub fn compile<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<Module<'a>> {
+        let (compiled_module, _) = self.comp_ast(module, ast, compilation_config, file_manager)?;
+        Ok(compiled_module)
+    }
+}
+
+fn llvm_link2_modules(m1: &Module, m2: &Module) -> Result<bool, String> {
+    use inkwell::llvm_sys::linker::LLVMLinkModules2;
+
+    // let char_ptr: *mut libc::c_char = ptr::null_mut();
+    
+    let code = unsafe { LLVMLinkModules2(m1.as_mut_ptr(), m2.as_mut_ptr()) };
+
+    // if code == 1 {
+    //     debug_assert!(!char_ptr.is_null());
+// 
+    //     unsafe { Err(char_ptr.as_ref().unwrap().to_string()) }
+    // } else {
+    //     Ok(())
+    // }
+    Ok(code == 0)
 }

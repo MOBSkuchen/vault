@@ -12,7 +12,7 @@ use crate::directives::CompilationConfig;
 use crate::filemanager::FileManager;
 use crate::lexer::tokenize;
 use crate::linker::{lld_link, ProdType};
-use crate::parser::Parser;
+use crate::parser::{Parser};
 use crate::utils::dedup;
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
@@ -243,7 +243,7 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let compiler = Compiler::new(&context, &builder, compile_job_data.module_id, file_manager);
 
     let mut compilation_config = CompilationConfig::new(compile_job_data.debug);
-    let module = compiler.comp_ast(module, ast, &mut compilation_config, file_manager)?;
+    let module = compiler.compile(module, ast, &mut compilation_config, file_manager)?;
     if compile_job_data.dev_debug_level as u32 >= 1 {
         println!("LLVM-Module (pre optimize):");
         module.print_to_stderr();
@@ -331,7 +331,7 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     libs.append(&mut compilation_config.libs);
     // Required libs for windows
     if link_job_data.stdlib {
-        libs.push("vault-stdlib-win.lib".to_string());
+        libs.push("vault-stdlib.sl-win.lib".to_string());
         libs.push("kernel32.lib".to_string());
         libs.push("ucrt.lib".to_string());
         libs.push("msvcrt.lib".to_string());

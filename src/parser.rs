@@ -151,11 +151,10 @@ impl<'a> Parser<'a> {
                     statements.push(AST::Directive(directive));
                 }
 
-                // // Parse import statements
-                // TokenType::Import => {
-                //     let import_stmt = self.parse_import(pointer)?;
-                //     statements.push(import_stmt);
-                // }
+                TokenType::Import => {
+                    let import_stmt = self.parse_import(pointer)?;
+                    statements.push(import_stmt);
+                }
 
                 _ => {
                     return Err(CodeError::toplevel_statement(token.code_position));
@@ -185,17 +184,17 @@ impl<'a> Parser<'a> {
         Ok(AST::Struct {name, members})
     }
 
-    // // Parse import statement (assuming a simple import structure)
-    // fn parse_import(&self, pointer: &mut usize) -> CodeResult<AST> {
-    //     // Consume 'import' keyword
-    //     self.consume(pointer, TokenType::Import, None)?;
-//
-    //     // Expect an identifier for the import (e.g., module name)
-    //     let module_name = self.consume(pointer, TokenType::Identifier, None)?;
-//
-    //     // Optionally, handle import paths or other structures here if needed
-    //     Ok(AST::Import(module_name))
-    // }
+    fn parse_import(&self, pointer: &mut usize) -> CodeResult<AST> {
+        self.consume(pointer, TokenType::Import, None)?;
+        
+        let module = self.consume(pointer, TokenType::Identifier, None)?;
+        
+        let path = if self.match_token(pointer, TokenType::As)? { 
+            Some(self.consume(pointer, TokenType::String, None)?)
+        } else { None };
+        
+        Ok(AST::Import { module, path })
+    }
 
     pub fn parse_function(&self, pointer: &mut usize) -> CodeResult<AST> {
         let fmode = if self.match_token(pointer, TokenType::Export)? { FunctionMode::Export }
@@ -479,6 +478,7 @@ impl<'a> Parser<'a> {
         let ident = self.previous(pointer).unwrap();
         let parent = ModuleAccessVariant::Base { name: ident.content.to_owned(), cpos: ident.code_position };
         if self.match_token(pointer, TokenType::ModuleAccess)? {
+            self.advance(pointer);
             Ok(ModuleAccessVariant::Double(Box::new(parent), Box::new(self.parse_mav(pointer)?)))
         } else {
             Ok(parent)
@@ -1008,5 +1008,6 @@ pub enum AST<'a> {
         name: &'a Token,
         members: Vec<(&'a Token, Types)>
     },
-    Directive(Directive<'a>)
+    Directive(Directive<'a>),
+    Import { module: & 'a Token, path: Option< & 'a Token> },
 }
