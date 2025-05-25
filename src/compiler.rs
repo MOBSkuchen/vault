@@ -858,7 +858,7 @@ impl<'ctx> Compiler<'ctx> {
         print_code_warn(code_warning, self.file_manager);
     }
 
-    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig) -> CodeResult<Module<'a>> {
+    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<Module<'a>> {
         let mut global_scope = Namespace::new();
         let mut should_do = true;
         
@@ -872,7 +872,7 @@ impl<'ctx> Compiler<'ctx> {
                 }
                 // TODO: Add an optional body to directives
                 AST::Directive(directive) => {
-                    should_do = visit_directive(directive, compilation_config)?;
+                    should_do = visit_directive(directive, compilation_config, file_manager)?;
                 }
                 _ if should_do => unreachable!(),
                 _ => {should_do = true}

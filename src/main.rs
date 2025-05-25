@@ -13,6 +13,7 @@ use crate::filemanager::FileManager;
 use crate::lexer::tokenize;
 use crate::linker::{lld_link, ProdType};
 use crate::parser::Parser;
+use crate::utils::dedup;
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -27,6 +28,7 @@ mod filemanager;
 mod codeviz;
 mod linker;
 mod directives;
+mod utils;
 
 #[derive(Copy, Clone)]
 enum DevDebugLevel {
@@ -241,7 +243,7 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let compiler = Compiler::new(&context, &builder, compile_job_data.module_id, file_manager);
 
     let mut compilation_config = CompilationConfig::new(compile_job_data.debug);
-    let module = compiler.comp_ast(module, ast, &mut compilation_config)?;
+    let module = compiler.comp_ast(module, ast, &mut compilation_config, file_manager)?;
     if compile_job_data.dev_debug_level as u32 >= 1 {
         println!("LLVM-Module (pre optimize):");
         module.print_to_stderr();
@@ -326,7 +328,7 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     let mut compilation_config = x.unwrap();
 
     let mut libs = link_job_data.libs;
-    libs.append(&mut compilation_config.additional_libs);
+    libs.append(&mut compilation_config.libs);
     // Required libs for windows
     if link_job_data.stdlib {
         libs.push("vault-stdlib-win.lib".to_string());
@@ -334,6 +336,9 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
         libs.push("ucrt.lib".to_string());
         libs.push("msvcrt.lib".to_string());
     }
+    
+    // Remove duplicates from libs
+    dedup(&mut libs);
 
     println!("Linking `{tmp_file}` with {} libs: {}", libs.len(), libs.iter().map(|x1| {format!("`{x1}`")}).collect::<Vec<String>>().join(", "));
 

@@ -3,6 +3,7 @@ use crate::lexer::CodePosition;
 use annotate_snippets::Snippet;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
+use crate::utils::relative_path;
 
 fn resolve_path<P: AsRef<Path>>(input_path: P) -> io::Result<PathBuf> {
     let path = input_path.as_ref();
@@ -18,24 +19,10 @@ fn resolve_path<P: AsRef<Path>>(input_path: P) -> io::Result<PathBuf> {
     }
 }
 
-pub fn relative_path(p: &str) -> &str {
-    // This *should* always work if compiler is accessing the nested files
-    // Otherwise, we will return the full path
-    p.strip_prefix(
-        &std::env::current_dir()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string(),
-    )
-    .or(Some(p))
-    .expect("There is no reason")
-}
-
 #[derive(Debug)]
 pub struct FileManager {
     pub input_file: String,
-    pub file_path: PathBuf,
+    pub _file_path: PathBuf,
     content: String,
 }
 
@@ -53,7 +40,7 @@ impl FileManager {
             } else {
                 Ok(Self {
                     input_file,
-                    file_path,
+                    _file_path: file_path,
                     content: content.unwrap(),
                 })
             }

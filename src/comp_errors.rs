@@ -3,6 +3,7 @@ use crate::filemanager::FileManager;
 use crate::lexer::{CodePosition, Token, TokenType};
 use colorize_rs::AnsiColor;
 use std::fmt;
+use num_derive::FromPrimitive;
 use crate::parser::{format_virtual_type_sig, TypesKind, VirtualDirectiveArgType};
 
 #[derive(Debug)]
@@ -37,7 +38,7 @@ impl CompilerError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, FromPrimitive)]
 pub enum CodeErrorType {
     LexerUnknownChar,
     LexerUnexpectedChar,
@@ -76,6 +77,7 @@ pub enum CodeWarningType {
     DeadCode,
     UnnecessaryCode,
     DiscouragedPractice,
+    DirectiveWarning
 }
 
 #[derive(Debug)]
@@ -273,14 +275,14 @@ impl CodeError {
         )
     }
 
-    pub fn error_from_directive(code_position: CodePosition, msg: String) -> Self {
+    pub fn error_from_directive(code_position: CodePosition, msg: String, note: Vec<String>) -> Self {
         Self::new(
             code_position,
             CodeErrorType::ParserUnexpectedToken,
             "Directive triggered an error".to_string(),
             Some("Triggered here".to_string()),
             msg,
-            vec![]
+            note
         )
     }
 
@@ -451,8 +453,8 @@ impl CodeWarning {
         position: CodePosition,
         code_warn_type: CodeWarningType,
         title: String,
-        footer: String,
         pointer: Option<String>,
+        footer: String,
         notes: Vec<String>,
     ) -> Self {
         Self {
@@ -470,8 +472,8 @@ impl CodeWarning {
             position,
             CodeWarningType::UnnecessaryCode,
             "Unnecessary code".to_string(),
-            "This code does not change the outcome".to_string(),
             None,
+            "This code does not change the outcome".to_string(),
             if extra.is_some() {
                 vec![extra.unwrap()]
             } else {
@@ -485,13 +487,24 @@ impl CodeWarning {
             position,
             CodeWarningType::DeadCode,
             "Dead code".to_string(),
-            "This code is unreachable".to_string(),
             None,
+            "This code is unreachable".to_string(),
             if extra.is_some() {
                 vec![extra.unwrap()]
             } else {
                 vec!["You should remove it".to_string()]
             },
+        )
+    }
+
+    pub fn directive_warning(position: CodePosition, msg: String) -> Self {
+        Self::new(
+            position,
+            CodeWarningType::DirectiveWarning,
+            "Warning via directive".to_string(),
+            Some("Triggered here".to_string()),
+            msg,
+            vec![]
         )
     }
 }

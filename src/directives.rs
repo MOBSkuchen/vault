@@ -1,14 +1,17 @@
-use crate::comp_errors::{CodeError, CodeResult, CompilerError};
+use std::hash::Hash;
+use crate::codeviz::print_code_warn;
+use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
+use crate::filemanager::FileManager;
 use crate::parser::{Directive, DirectiveArgType, DirectiveExpr, VirtualDirectiveArgType};
 
 pub struct CompilationConfig {
     debug: bool,
-    pub additional_libs: Vec<String>
+    pub libs: Vec<String>
 }
 
 impl CompilationConfig {
     pub fn new(debug: bool) -> Self {
-        Self {debug, additional_libs: Vec::new()}
+        Self {debug, libs: Vec::new()}
     }
 }
 
@@ -122,16 +125,17 @@ macro_rules! virtual_directive_args {
     };
 }
 
-pub fn visit_directive(directive: Directive, compilation_config: &mut CompilationConfig) -> CodeResult<bool> {
-    match directive.name.content.to_uppercase().as_str() {
+pub fn visit_directive(directive: Directive, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<bool> {
+    let d = directive.name.content.to_uppercase();
+    match d.as_str() {
         "AND" => {
             virtual_directive_args! {
                 directive = directive,
                 args = [ left: Directive, right: Directive ],
                 values = directive.arguments,
             }
-            let left = visit_directive(*right.clone(), compilation_config)?;
-            let right = visit_directive(*right.clone(), compilation_config)?;
+            let left = visit_directive(*left.clone(), compilation_config, file_manager)?;
+            let right = visit_directive(*right.clone(), compilation_config, file_manager)?;
             Ok(left && right)
         }
         "OR" => {
@@ -140,9 +144,19 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ left: Directive, right: Directive ],
                 values = directive.arguments,
             }
-            let left = visit_directive(*left.clone(), compilation_config)?;
-            let right = visit_directive(*right.clone(), compilation_config)?;
+            let left = visit_directive(*left.clone(), compilation_config, file_manager)?;
+            let right = visit_directive(*right.clone(), compilation_config, file_manager)?;
             Ok(left || right)
+        }
+        "XOR" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ left: Directive, right: Directive ],
+                values = directive.arguments,
+            }
+            let left = visit_directive(*left.clone(), compilation_config, file_manager)?;
+            let right = visit_directive(*right.clone(), compilation_config, file_manager)?;
+            Ok(left ^ right)
         }
         "ALWAYS" => {
             virtual_directive_args! {
@@ -166,16 +180,24 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ expr: Directive ],
                 values = directive.arguments,
             }
-            let left = visit_directive(*expr.clone(), compilation_config)?;
+            let left = visit_directive(*expr.clone(), compilation_config, file_manager)?;
             Ok(!left)
         }
-        "ON_OS" => {
+        "OS" => {
             virtual_directive_args! {
                 directive = directive,
                 args = [ os: String ],
                 values = directive.arguments,
             }
             Ok(std::env::consts::OS == os)
+        }
+        "ARCH" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ arch: String ],
+                values = directive.arguments,
+            }
+            Ok(std::env::consts::ARCH == arch)
         }
         "DEBUG" => {
             virtual_directive_args! {
@@ -191,27 +213,18 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ lib: String ],
                 values = directive.arguments,
             }
-            compilation_config.additional_libs.push(lib.clone());
+            compilation_config.libs.push(lib.clone());
             Ok(true)
         }
-        "IF" => {
+        // IF && IF IMMUTABLE
+        "IF" | "IFI" => {
             virtual_directive_args! {
                 directive = directive,
                 args = [ cond: Directive, exe: Directive,  ],
                 values = directive.arguments,
             }
-            let ret = if visit_directive(*cond.clone(), compilation_config)? { visit_directive(*exe.clone(), compilation_config)? } else { false };
-            Ok(ret)
-        }
-        // IF IMMUTABLE
-        "IFI" => {
-            virtual_directive_args! {
-                directive = directive,
-                args = [ cond: Directive, exe: Directive,  ],
-                values = directive.arguments,
-            }
-            if visit_directive(*cond.clone(), compilation_config)? { visit_directive(*exe.clone(), compilation_config)?; }
-            Ok(true)
+            let ret = if visit_directive(*cond.clone(), compilation_config, file_manager)? { visit_directive(*exe.clone(), compilation_config, file_manager)? } else { false };
+            Ok(if d.ends_with("I") { true } else { ret })
         }
         "ERR" => {
             virtual_directive_args! {
@@ -219,7 +232,26 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ msg: String ],
                 values = directive.arguments,
             }
-            Err(CodeError::error_from_directive(directive.code_position, msg.to_owned()))
+            Err(CodeError::error_from_directive(directive.code_position, msg.to_owned(), vec![]))
+        }
+        // Error note
+        "ERRN" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ msg: String, note: String ],
+                values = directive.arguments,
+            }
+            Err(CodeError::error_from_directive(directive.code_position, msg.to_owned(), vec![note.to_owned()]))
+        }
+        "WARN" | "WARNF" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [ msg: String ],
+                values = directive.arguments,
+            }
+            let warning = CodeWarning::directive_warning(directive.code_position, msg.to_owned());
+            print_code_warn(warning, file_manager);
+            Ok(!d.ends_with("F"))
         }
         _ => Err(CodeError::unknown_directive(directive.name)) 
     }
