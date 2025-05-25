@@ -3,6 +3,9 @@ use std::fmt::{Display, Formatter};
 use clap::{Arg, ValueHint};
 use clap_builder::Command;
 use inkwell::context::Context;
+use inkwell::llvm_sys::LLVMModule;
+use inkwell::llvm_sys::prelude::LLVMModuleRef;
+use inkwell::module::Module;
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lld_rx::LldFlavor;
 use crate::codegen::Codegen;
@@ -12,8 +15,8 @@ use crate::directives::CompilationConfig;
 use crate::filemanager::FileManager;
 use crate::lexer::tokenize;
 use crate::linker::{lld_link, ProdType};
-use crate::parser::{Parser};
-use crate::utils::dedup;
+use crate::parser::Parser;
+use crate::utils::{dedup};
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -331,7 +334,7 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     libs.append(&mut compilation_config.libs);
     // Required libs for windows
     if link_job_data.stdlib {
-        libs.push("vault-stdlib.sl-win.lib".to_string());
+        libs.push("vault-stdlib-win.lib".to_string());
         libs.push("kernel32.lib".to_string());
         libs.push("ucrt.lib".to_string());
         libs.push("msvcrt.lib".to_string());

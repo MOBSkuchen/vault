@@ -1,5 +1,9 @@
 use std::collections::HashSet;
 use std::hash::Hash;
+use inkwell::context::Context;
+use inkwell::llvm_sys::prelude::LLVMModuleRef;
+use inkwell::memory_buffer::MemoryBuffer;
+use inkwell::module::Module;
 
 #[allow(clippy::needless_range_loop)]
 pub fn dedup<T: Hash + Eq>(v: &mut Vec<T>) {
