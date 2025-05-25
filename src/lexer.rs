@@ -69,6 +69,7 @@ pub enum TokenType {
     Malloc,
     Free,
     Directive,
+    ModuleAccess,
 
     // Virtual types
     Expression,
@@ -140,6 +141,7 @@ impl TokenType {
             TokenType::Malloc => "|>",
             TokenType::Free => "|<",
             TokenType::Directive => "#",
+            TokenType::ModuleAccess => "::",
         })
             .to_string()
     }
@@ -365,7 +367,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 }
             }
 
-            '(' | ')' | ',' | '.' | '+' | '*' | ':' | ';' | '{' | '}' | '#' => {
+            '(' | ')' | ',' | '.' | '+' | '*' | ';' | '{' | '}' | '#' => {
                 let token_type = match current {
                     '(' => TokenType::LParen,
                     ')' => TokenType::RParen,
@@ -374,7 +376,6 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     '+' => TokenType::Plus,
                     '*' => TokenType::Star,
                     '|' => TokenType::Pipe,
-                    ':' => TokenType::Colon,
                     ';' => TokenType::SemiColon,
                     '{' => TokenType::LBrace,
                     '}' => TokenType::RBrace,
@@ -391,6 +392,14 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     return Ok(scanner.this_as_token(TokenType::And));
                 }
                 return Ok(scanner.this_as_token(TokenType::Ref));
+            }
+            ':' => {
+                scanner.pop();
+                if let Some(':') = scanner.peek() {
+                    scanner.pop();
+                    return Ok(scanner.this_as_token(TokenType::ModuleAccess));
+                }
+                return Ok(scanner.this_as_token(TokenType::Colon));
             }
             '-' => {
                 // Record the start position *before* consuming the '-' so we can slice

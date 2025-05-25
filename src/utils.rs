@@ -30,3 +30,16 @@ pub fn relative_path(p: &str) -> &str {
         .or(Some(p))
         .expect("There is no reason")
 }
+
+#[macro_export]
+macro_rules! double_unwrap {
+    ($expr:expr) => {{
+        match $expr {
+            Ok(inner) => match inner {
+                Ok(value) => Ok(Ok(value)),
+                Err(e) => Ok(Err(e)),
+            },
+            Err(e) => Err(e),
+        }
+    }};
+}

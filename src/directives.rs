@@ -1,4 +1,3 @@
-use std::hash::Hash;
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::filemanager::FileManager;

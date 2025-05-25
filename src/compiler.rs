@@ -5,34 +5,14 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType};
+use inkwell::types::{AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType, StructType};
 use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::directives::{visit_directive, CompilationConfig};
 use crate::filemanager::FileManager;
 use crate::lexer::{CodePosition, Token};
-use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, Types, TypesKind, AST};
-
-enum PrimitiveErrors {
-    TypeVoidUnallowed,
-    UnknownStruct
-}
-
-type PrimRes<T> = Result<T, PrimitiveErrors>;
-
-fn resolve_prim_res<T>(result: Result<T, PrimitiveErrors>, tok: &Token) -> CodeResult<T> {
-    result.map_err(|x| {
-        match x {
-            PrimitiveErrors::TypeVoidUnallowed => {
-                CodeError::void_type(tok)
-            }
-            PrimitiveErrors::UnknownStruct => {
-                CodeError::symbol_not_found(tok)
-            }
-        }
-    })
-}
+use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, ModuleAccessVariant, Types, TypesKind, AST};
 
 fn is_type_signed(typ: &TypesKind) -> bool {
     !matches!(typ, TypesKind::U32 | TypesKind::U64 | TypesKind::U8 | TypesKind::Bool)
@@ -82,10 +62,13 @@ impl<'ctx> Function<'ctx> {
     }
 }
 
-pub struct Namespace<'ns> {
-    pub definitions: HashMap<String, (TypesKind, PointerValue<'ns>)>,
-    pub functions: HashMap<String, (FunctionValue<'ns>, bool)>,
-    pub struct_order: HashMap<String, Vec<(String, TypesKind)>>
+#[derive(Debug)]
+pub struct Namespace<'n> {
+    pub definitions: HashMap<String, (TypesKind, PointerValue<'n>)>,
+    pub structs: HashMap<String, StructType<'n>>,
+    pub functions: HashMap<String, (FunctionValue<'n>, bool)>,
+    pub struct_order: HashMap<String, Vec<(String, TypesKind)>>,
+    pub modules: HashMap<String, &'n Namespace<'n>>
 }
 
 // Check local and global scope
@@ -98,7 +81,7 @@ fn check_ls_gs_func<'a>(name: &str, ls: &'a Namespace<'a>, gs: &'a Namespace<'a>
 
 impl<'ns> Namespace<'ns> {
     fn new() -> Self {
-        Self { definitions: HashMap::new(), functions: HashMap::new(), struct_order: HashMap::new() }
+        Self { definitions: HashMap::new(), functions: HashMap::new(), struct_order: HashMap::new(), modules: HashMap::new(), structs: HashMap::new() }
     }
 }
 
@@ -122,57 +105,63 @@ impl<'ctx> Compiler<'ctx> {
         Self { context, builder, module_name, file_manager }
     }
 
-    fn convert_type_normal<'a>(&'a self, typ: &TypesKind) -> PrimRes<Box<dyn BasicType + 'a>> {
-        match typ {
-            TypesKind::I32 | TypesKind::U32 => Ok(Box::new(self.context.i32_type())),
-            TypesKind::F32 => Ok(Box::new(self.context.f32_type())),
-            TypesKind::Void => Err(PrimitiveErrors::TypeVoidUnallowed),
-            TypesKind::Struct { name } => {
-                let x = self.context.get_struct_type(name).map(|t| Box::new(t.as_basic_type_enum())).ok_or({PrimitiveErrors::UnknownStruct})?;
-                Ok(x)
-            },
-            TypesKind::Function { ret, params } => {
-                Ok(Box::new(self.convert_type_function(&ret.to_owned(), params.iter().map(|x| {x.to_owned()}).collect())?.ptr_type(AddressSpace::default())))
-            },
-            TypesKind::Ptr(ptr) => {
-                Ok(Box::new(self.convert_type_normal(ptr)?.ptr_type(AddressSpace::default()).as_basic_type_enum()))
-            }
-            TypesKind::Pointer => Ok(Box::new(self.context.ptr_type(AddressSpace::default()).as_basic_type_enum())),
-            TypesKind::I64 | TypesKind::U64 => Ok(Box::new(self.context.i32_type())),
-            TypesKind::F64  => Ok(Box::new(self.context.f64_type())),
-            TypesKind::U8 => Ok(Box::new(self.context.i8_type())),
-            TypesKind::Bool => Ok(Box::new(self.context.custom_width_int_type(1).as_basic_type_enum())),
+    fn convert_type_normal(&self, typ: &TypesKind, global_scope: &Namespace, cpos: CodePosition) -> CodeResult<BasicTypeEnum> {
+        // FUCK THIS SHIT
+        unsafe {
+            Ok(BasicTypeEnum::new(match typ {
+                TypesKind::I32 | TypesKind::U32 => Ok(self.context.i32_type().as_type_ref()),
+                TypesKind::F32 => Ok(self.context.f32_type().as_type_ref()),
+                TypesKind::Void => Err(CodeError::void_type(cpos)),
+                TypesKind::Struct { name } => {
+                    let holder_scope = self.get_holder_scope(name, None, global_scope)?;
+                    let x = holder_scope.structs.get(&name.last_name().unwrap()).map(|t| t.as_basic_type_enum());
+                    Ok(x.unwrap().as_type_ref())
+                }
+                TypesKind::Function { ret, params } => {
+                    Ok(self.convert_type_function(&ret.to_owned(), params.iter().map(|x| { x.to_owned() }).collect(), global_scope, cpos)?.ptr_type(AddressSpace::default()).as_type_ref())
+                }
+                TypesKind::Ptr(ptr) => {
+                    Ok(self.convert_type_normal(ptr, global_scope, cpos)?.ptr_type(AddressSpace::default()).as_type_ref())
+                }
+                TypesKind::Pointer => Ok(self.context.ptr_type(AddressSpace::default()).as_type_ref()),
+                TypesKind::I64 | TypesKind::U64 => Ok(self.context.i32_type().as_type_ref()),
+                TypesKind::F64 => Ok(self.context.f64_type().as_type_ref()),
+                TypesKind::U8 => Ok(self.context.i8_type().as_type_ref()),
+                TypesKind::Bool => Ok(self.context.custom_width_int_type(1).as_type_ref()),
+            }?))
         }
     }
 
-    fn convert_type_function(&self, ret_type: &TypesKind, params: Vec<TypesKind>) -> PrimRes<FunctionType> {
+    fn convert_type_function(&self, ret_type: &TypesKind, params: Vec<TypesKind>, global_scope: &Namespace, cpos: CodePosition) -> CodeResult<FunctionType> {
         let param_types: Vec<BasicMetadataTypeEnum> = params
             .iter()
             .map(|typ| {
-                let converted = self.convert_type_normal(typ)?; // This returns a Result
-                Ok(BasicMetadataTypeEnum::from(converted.as_basic_type_enum()))
+                self.convert_type_normal(typ, global_scope, cpos).map(|x1| BasicMetadataTypeEnum::from(x1.as_basic_type_enum()))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        match ret_type {
-            TypesKind::I32 | TypesKind::U32 => Ok(self.context.i32_type().fn_type(&param_types, false)),
-            TypesKind::F32 => Ok(self.context.f32_type().fn_type(&param_types, false)),
-            TypesKind::Void => Ok(self.context.void_type().fn_type(&param_types, false)),
+        let t_ref = match ret_type {
+            TypesKind::I32 | TypesKind::U32 => Ok(self.context.i32_type().fn_type(&param_types, false).as_type_ref()),
+            TypesKind::F32 => Ok(self.context.f32_type().fn_type(&param_types, false).as_type_ref()),
+            TypesKind::Void => Ok(self.context.void_type().fn_type(&param_types, false).as_type_ref()),
             TypesKind::Struct { name } => {
-                self.context.get_struct_type(name).map(|t| t.fn_type(&param_types, false)).ok_or({PrimitiveErrors::UnknownStruct})
+                let holder_scope = self.get_holder_scope(name, None, global_scope)?;
+                let x = holder_scope.structs.get(&name.last_name().unwrap()).map(|t| Box::new(t.as_basic_type_enum()));
+                Ok(x.unwrap().fn_type(&param_types, false).to_owned().as_type_ref())
             },
             TypesKind::Function { ret,params } => {
-                Ok(self.convert_type_function(&ret.to_owned(), params.iter().map(|x| { x.to_owned() }).collect())?.ptr_type(AddressSpace::default()).fn_type(&param_types, false))
+                Ok(self.convert_type_function(&ret.to_owned(), params.iter().map(|x| { x.to_owned() }).collect(), global_scope, cpos)?.ptr_type(AddressSpace::default()).fn_type(&param_types, false).as_type_ref())
             },
             TypesKind::Ptr(ptr) => {
-                Ok(self.convert_type_normal(ptr)?.ptr_type(AddressSpace::default()).fn_type(&param_types, false))
+                Ok(self.convert_type_normal(ptr, global_scope, cpos)?.ptr_type(AddressSpace::default()).fn_type(&param_types, false).as_type_ref())
             },
-            TypesKind::Pointer => Ok(self.context.ptr_type(AddressSpace::default()).fn_type(&param_types, false)),
-            TypesKind::I64 | TypesKind::U64 => Ok(self.context.i64_type().fn_type(&param_types, false)),
-            TypesKind::F64 => Ok(self.context.f64_type().fn_type(&param_types, false)),
-            TypesKind::U8 => Ok(self.context.i8_type().fn_type(&param_types, false)),
-            TypesKind::Bool => Ok(self.context.custom_width_int_type(1).fn_type(&param_types, false)),
-        }
+            TypesKind::Pointer => Ok(self.context.ptr_type(AddressSpace::default()).fn_type(&param_types, false).as_type_ref()),
+            TypesKind::I64 | TypesKind::U64 => Ok(self.context.i64_type().fn_type(&param_types, false).as_type_ref()),
+            TypesKind::F64 => Ok(self.context.f64_type().fn_type(&param_types, false).as_type_ref()),
+            TypesKind::U8 => Ok(self.context.i8_type().fn_type(&param_types, false).as_type_ref()),
+            TypesKind::Bool => Ok(self.context.custom_width_int_type(1).fn_type(&param_types, false).as_type_ref()),
+        }?;
+        unsafe { Ok(FunctionType::new(t_ref)) }
     }
     
     fn to_bool_int<'a>(&'a self, cond: IntValue<'a>) -> Box<dyn BasicValue + 'a> {
@@ -252,16 +241,56 @@ impl<'ctx> Compiler<'ctx> {
             notes.push("As you are trying to access a field from a struct value, you might have forgotten to reference it?".to_string());
             CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Ptr(Box::new(parent_type.clone())), notes)
         } else {
-            CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Struct { name: "struct".to_string() }, notes)
+            todo!("Make type mismatch work");
+            // CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Struct { name: "struct".to_string() }, notes)
+        }
+    }
+
+    fn resolve_mav_as_module<'a>(&self, mav: &ModuleAccessVariant, scope: &Namespace<'a>) -> CodeResult<&'a Namespace<'a>> {
+        match mav {
+            ModuleAccessVariant::Base { name, cpos } => {
+                Ok(scope.modules.get(name).ok_or_else(|| { CodeError::prim_module_not_found(name, *cpos) })?)
+            }
+            ModuleAccessVariant::Double(a, b) => {
+                let ns1 = self.resolve_mav_as_module(a, scope)?;
+                let ns2 = self.resolve_mav_as_module(b, ns1)?;
+                Ok(ns2)
+            }
+        }
+    }
+
+    fn resolve_mav<'a>(&self, mav: &ModuleAccessVariant, ls: Option<&'a Namespace<'a>>, scope: &'a Namespace<'a>) -> CodeResult<&'a (TypesKind, PointerValue<'a>)> {
+        match mav {
+            ModuleAccessVariant::Base { name, cpos } => {
+                Ok(ls.and_then(|n1| {n1.definitions.get(name)}).or_else(|| { scope.definitions.get(name) })
+                    .ok_or_else(|| { CodeError::prim_symbol_not_found(name, *cpos) })?)
+            }
+            ModuleAccessVariant::Double(a, b) => {
+                let ns = self.resolve_mav_as_module(a, scope)?;
+                Ok(self.resolve_mav(b, None, ns)?)
+            }
+        }
+    }
+
+    fn get_holder_scope<'a>(&self, mav: &ModuleAccessVariant, ls: Option<&'a Namespace<'a>>, scope: &'a Namespace<'a>) -> CodeResult<&'a Namespace<'a>> {
+        match mav {
+            ModuleAccessVariant::Base { name, cpos } => {
+                Ok(ls.and_then(|n1| {if n1.definitions.contains_key(name) || n1.structs.contains_key(name) {Some(n1)} else {None}}).or_else(|| {if scope.definitions.contains_key(name) || scope.structs.contains_key(name) {Some(scope)} else {None}})
+                    .ok_or_else(|| { CodeError::prim_symbol_not_found(name, *cpos) })?)
+            }
+            ModuleAccessVariant::Double(a, _) => {
+                let ns = self.resolve_mav_as_module(a, scope)?;
+                Ok(ns)
+            }
         }
     }
 
     fn visit_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace<'_>, expr: Expression, 
                       type_hint: Option<&TypesKind>, must_use: bool) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
         Ok(match expr.expression {
-            ExpressionKind::Identifier(name) => {
-                let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).ok_or_else(|| {CodeError::symbol_not_found(name)})?;
-                let real_type = resolve_prim_res(self.convert_type_normal(&def.0), name)?;
+            ExpressionKind::ModuleAccess(mav) => {
+                let def = self.resolve_mav(&mav, Some(&function.function_scope), global_scope)?;
+                let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
                 (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
             }
             ExpressionKind::IntNumber { value, .. } => {
@@ -282,10 +311,8 @@ impl<'ctx> Compiler<'ctx> {
                 }
                 self.visit_bin_op(cpos_left.merge(cpos), lhs_val, rhs_val, op.1, l_typ)?
             }
-            ExpressionKind::FunctionCall { name, arguments } => {
-                let def = check_ls_gs_defs(&name.content, &function.function_scope, global_scope).ok_or_else(|| {
-                    CodeError::symbol_not_found(name)
-                })?;
+            ExpressionKind::FunctionCall { name: mav, arguments } => {
+                let def = self.resolve_mav(&mav, Some(&function.function_scope), global_scope)?;
                 match &def.0 {
                     TypesKind::Function { params, ret } => {
                         if let Some(hint) = type_hint {
@@ -295,7 +322,7 @@ impl<'ctx> Compiler<'ctx> {
                         }
                         let mut h_args = vec![];
                         if arguments.len() != params.len() {
-                            return Err(CodeError::argument_count(name, arguments.len(), params.len()))
+                            return Err(CodeError::argument_count(mav.ensured_compute_codeposition(), arguments.len(), params.len()))
                         }
                         for (count, arg) in arguments.into_iter().enumerate() {
                             let cpos = arg.code_position;
@@ -307,13 +334,14 @@ impl<'ctx> Compiler<'ctx> {
                         }
                         // Call function, if it does not return a value (Void function) return null
                         // In that case the return value will NOT be used, because of other Void checks
-                        let call = self.builder.build_call(check_ls_gs_func(&name.content, &function.function_scope, global_scope)
+                        let holder_scope = self.get_holder_scope(&mav, Some(&function.function_scope), global_scope)?;
+                        let call = self.builder.build_call(holder_scope.functions.get(&mav.last_name().unwrap())
                             .expect("Failed to get function - which should exist btw").0, h_args.as_slice(), "").expect("Failed to load");
                         (Box::new(call.try_as_basic_value().left_or(self.null().as_basic_value_enum())), ret.as_ref().clone())
                     }
-                    _ => Err(CodeError::symbol_not_a_function(name))?
+                    _ => Err(CodeError::symbol_not_a_function(&mav))?
                 }
-            },
+            }
             ExpressionKind::String(string) => {
                 let global = self.builder.build_global_string_ptr(&string.content, "").expect("Failed to create global str ptr").as_pointer_value();
                 (Box::new(global.as_basic_value_enum()), TypesKind::Ptr(Box::new(TypesKind::U8)))
@@ -321,7 +349,7 @@ impl<'ctx> Compiler<'ctx> {
             ExpressionKind::CastExpr { expr, typ: new_type } => {
                 let (value, old_type) = self.visit_expr(function, global_scope, *expr, None, true)?;
                 let value = value.as_basic_value_enum();
-                let real_new_typ = resolve_prim_res(self.convert_type_normal(&new_type.kind), new_type.token)?
+                let real_new_typ = self.convert_type_normal(&new_type.kind, global_scope, new_type.cpos)?
                     .as_basic_type_enum();
 
                 let result = match old_type {
@@ -406,7 +434,7 @@ impl<'ctx> Compiler<'ctx> {
                                     .ok()
                             }
                             TypesKind::Ptr(ptr_type) => {
-                                let target_type = resolve_prim_res(self.convert_type_normal(ptr_type), new_type.token)?
+                                let target_type = self.convert_type_normal(ptr_type, global_scope, new_type.cpos)?
                                     .ptr_type(AddressSpace::default());
                                 self.builder
                                     .build_pointer_cast(ptr_val, target_type, "")
@@ -427,7 +455,7 @@ impl<'ctx> Compiler<'ctx> {
                 };
 
                 (Box::new(result.ok_or_else(|| {
-                    CodeError::invalid_cast(new_type.token, &new_type.kind, &old_type)
+                    CodeError::invalid_cast(new_type.cpos, &new_type.kind, &old_type)
                 })?), new_type.kind)
             }
             ExpressionKind::Reference { var } => {
@@ -449,8 +477,8 @@ impl<'ctx> Compiler<'ctx> {
                     }
                 };
 
-                let ptr_t = resolve_prim_res(self.convert_type_normal(&def.0), var)?;
-                let real_deref_type = resolve_prim_res(self.convert_type_normal(deref_type), var)?;
+                let ptr_t = self.convert_type_normal(&def.0, global_scope, var.code_position)?;
+                let real_deref_type = self.convert_type_normal(deref_type, global_scope, var.code_position)?;
                 
                 let ptr = self.builder.build_load(ptr_t.as_basic_type_enum(), def.1, "")
                     .expect("Load (deref) failed").as_basic_value_enum().into_pointer_value();
@@ -458,14 +486,15 @@ impl<'ctx> Compiler<'ctx> {
                     .expect("Load (deref) failed").as_basic_value_enum();
                 (Box::new(value), *deref_type.clone())
             },
-            ExpressionKind::New { name, arguments } => {
-                let virtual_struct_type = TypesKind::Struct { name: name.content.clone() };
-                let struct_type = resolve_prim_res(self.convert_type_normal(&virtual_struct_type), name)?
-                    .as_basic_type_enum()
-                    .into_struct_type();
-
-                let expected = global_scope.struct_order
-                    .get(&name.content)
+            ExpressionKind::New { name: mav, arguments } => {
+                let cpos = mav.ensured_compute_codeposition();
+                let mav_last_name = mav.last_name().clone().unwrap();
+                let holder_scope = self.get_holder_scope(&mav, Some(&function.function_scope), global_scope)?;
+                let virtual_struct_type = TypesKind::Struct { name: mav };
+                let struct_type = self.convert_type_normal(&virtual_struct_type, global_scope, cpos)?
+                    .as_basic_type_enum().into_struct_type();
+                let expected = holder_scope.struct_order
+                    .get(&mav_last_name)
                     .expect("Failed to get struct - which should not happen btw");
 
                 let params = arguments.into_iter().enumerate()
@@ -503,9 +532,10 @@ impl<'ctx> Compiler<'ctx> {
                 let (stct, stct_name) = match &parent_type {
                     TypesKind::Ptr(ptr) => {
                         match ptr.deref() {
-                            TypesKind::Struct { name } => {
+                            TypesKind::Struct { name: mav } => {
                                 inner_struct_type = ptr;
-                                (global_scope.struct_order.get(name).unwrap(), name)
+                                let holder_scope = self.get_holder_scope(mav, Some(&function.function_scope), global_scope)?;
+                                (holder_scope.struct_order.get(&mav.last_name().unwrap()).unwrap(), mav)
                             }
                             _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type))
                         }
@@ -514,18 +544,18 @@ impl<'ctx> Compiler<'ctx> {
                 };
                 if let Some(item) = stct.iter().position(|x1| {x1.0 == child.content}) {
                     let (_, field_type) = &stct[item];
-                    let llvm_struct_type = resolve_prim_res(self.convert_type_normal(inner_struct_type), child)?.as_basic_type_enum();
+                    let llvm_struct_type = self.convert_type_normal(inner_struct_type, global_scope, child.code_position)?.as_basic_type_enum();
                     let val_ptr = self.builder.build_struct_gep(llvm_struct_type, parent_value.as_basic_value_enum().into_pointer_value(), item as u32, "").expect("Failed to GEP struct item ptr");
                     let ret_typ = if ptr {TypesKind::Ptr(Box::new(field_type.clone()))} else { field_type.clone()};
                     if ptr {
                         (Box::new(val_ptr), ret_typ)
                     } else {
-                        let llvm_field_type = resolve_prim_res(self.convert_type_normal(field_type), child)?.as_basic_type_enum();
+                        let llvm_field_type = self.convert_type_normal(field_type, global_scope, child.code_position)?.as_basic_type_enum();
                         let loaded = self.builder.build_load(llvm_field_type, val_ptr, "").expect("Failed to load struct access ptr");
                         (Box::new(loaded), ret_typ)
                     }
                 } else {
-                    return Err(CodeError::field_not_found(child, stct_name))
+                    return Err(CodeError::field_not_found(child, &stct_name.name()))
                 }
             },
             ExpressionKind::Malloc { amount } => {
@@ -557,32 +587,33 @@ impl<'ctx> Compiler<'ctx> {
         
         match statement {
             AST::VariableDef { name, value, typ } => {
-                let mut typ_tok: &Token = name;
+                let mut typ_tok = name.code_position;
 
                 let val = if let Some(value) = value {
                     let cpos = &value.code_position.clone();
                     let (expr, typ) = if let Some(typ) = typ {
-                        typ_tok = typ.token;
+                        typ_tok = typ.cpos;
                         let (expr, got_typ) = self.visit_expr(function, global_scope, value, Some(&typ.kind), true)?;
                         if got_typ != typ.kind { return Err(CodeError::type_mismatch(cpos, &got_typ, &typ.kind, vec![])) }
                         (expr, got_typ)
                     } else {
                         self.visit_expr(function, global_scope, value, None, true)?
                     };
-                    let pointer = self.builder.build_alloca(resolve_prim_res(self.convert_type_normal(&typ), typ_tok)?.as_basic_type_enum(), "").expect("Can not allocate for var-define");
+                    let pointer = self.builder.build_alloca(self.convert_type_normal(&typ, global_scope, typ_tok)?.as_basic_type_enum(), "").expect("Can not allocate for var-define");
                     self.builder.build_store(pointer, expr.as_basic_value_enum()).expect("Failed to store value of variable define");
                     (typ, pointer)
                 } else {
                     let typ = typ.unwrap();
-                    (typ.kind.clone(), self.builder.build_alloca(resolve_prim_res(self.convert_type_normal(&typ.kind), typ.token)?.as_basic_type_enum(), "").expect("Can not allocate for var-declare"))
+                    (typ.kind.clone(), self.builder.build_alloca(self.convert_type_normal(&typ.kind, global_scope, typ_tok)?.as_basic_type_enum(), "").expect("Can not allocate for var-declare"))
                 };
                 function.function_scope.definitions.insert(name.content.clone(), val);
             }
             AST::VariableReassign { name, value } => {
+                let holder_scope = self.get_holder_scope(&name, Some(&function.function_scope), global_scope)?;
                 let cpos = &value.code_position.clone();
-                let (typ, ptr) = function.function_scope.definitions.get(&name.content).ok_or_else(|| {CodeError::symbol_not_found(name)})?;
+                let (typ, ptr) = holder_scope.definitions.get(&name.last_name().unwrap()).ok_or_else(|| {CodeError::prim_symbol_not_found(&name.name(), name.ensured_compute_codeposition())})?;
                 let (data, got_type) = self.visit_expr(function, global_scope, value, Some(typ), true)?;
-                if got_type != *typ { return Err(CodeError::type_mismatch(cpos, &got_type, typ, vec![format!("This is because `{}` was originally declared as {typ}", name.content)])) } 
+                if got_type != *typ { return Err(CodeError::type_mismatch(cpos, &got_type, typ, vec![format!("This is because `{}` was originally declared as {typ}", name.name())])) }
                 self.builder.build_store(*ptr, data.as_basic_value_enum()).expect("Failed to store value of variable define");
             }
             AST::Expression { expr } => { 
@@ -774,7 +805,7 @@ impl<'ctx> Compiler<'ctx> {
             AST::Expression { expr } => expr.code_position,
             AST::FunctionDef { name, .. } => name.code_position,
             AST::VariableDef { name, .. } => name.code_position,
-            AST::VariableReassign { name, .. } => name.code_position,
+            AST::VariableReassign { name, .. } => name.ensured_compute_codeposition(),
             AST::Return(_, tok) => tok.code_position,
             AST::IfCondition { first, .. } => first.condition.code_position,
             AST::CondLoop(c) => c.condition.code_position,
@@ -785,12 +816,12 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn visit_function_def<'a>(&'a self, module: &Module<'a>, name: &Token, fmode: FunctionMode, 
-                                         return_type: Types, params: Vec<(&Token, Types)>, global_scope: &mut Namespace<'ctx>,
+                                         return_type: Types, params: Vec<(&Token, Types)>, global_scope: &mut Namespace<'a>,
                                          body: Option<Vec<AST>>) -> CodeResult<()>
-    where 'a: 'ctx 
     {
-        let fn_type = resolve_prim_res(self.convert_type_function(&return_type.kind, params.iter().map(|x| {x.1.kind.clone()}).collect()), name)?;
+        let fn_type = self.convert_type_function(&return_type.kind, params.iter().map(|x| {x.1.kind.clone()}).collect(), global_scope, name.code_position)?;
         
         if let Some((_, already_defined)) = global_scope.functions.get(&name.content) { 
             if *already_defined {
@@ -841,16 +872,17 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
     
-    fn visit_struct<'a>(&self, name: &'a Token, members: Vec<(&'a Token, Types<'a>)>, global_scope: &mut Namespace<'ctx>) -> CodeResult<()> {
+    fn visit_struct<'a>(&self, name: &'a Token, members: Vec<(&'a Token, Types)>, global_scope: &'a mut Namespace<'ctx>) -> CodeResult<()> {
         let real_membs = members.iter()
             .map(|x| {
-                resolve_prim_res(self.convert_type_normal(&x.1.kind)
-                                     .map(|x1| x1.as_basic_type_enum()), x.1.token)})
+                self.convert_type_normal(&x.1.kind, global_scope, x.1.cpos)
+                                     .map(|x1| x1.as_basic_type_enum())})
                     .collect::<CodeResult<Vec<BasicTypeEnum>>>()?;
         let asoc = members.iter().map(|x2| {(x2.0.content.clone(), x2.1.kind.clone())}).collect();
         global_scope.struct_order.insert(name.content.to_owned(), asoc);
         let typ = self.context.opaque_struct_type(&name.content);
         typ.set_body(real_membs.as_slice(), false);
+        global_scope.structs.insert(name.content.clone(), typ);
         Ok(())
     }
     

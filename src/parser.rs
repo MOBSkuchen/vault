@@ -264,7 +264,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_function_call<'b>(&'b self, pointer: &mut usize, name: &'b Token) -> CodeResult<Expression<'b>> {
+    fn parse_function_call(&self, pointer: &mut usize, name: ModuleAccessVariant) -> CodeResult<Expression> {
+        let start_pos = self.previous(pointer).unwrap().code_position;
         self.consume(pointer, TokenType::LParen, None)?;
         let mut arguments = Vec::new();
 
@@ -282,9 +283,7 @@ impl<'a> Parser<'a> {
         self.consume(pointer, TokenType::RParen, Some("Expected `)` after arguments".to_string()))?;
 
         let end_pos = self.previous(pointer).unwrap().code_position;
-        let start_pos = name.code_position;
-        let pos = start_pos.merge(end_pos);
-        Ok((ExpressionKind::FunctionCall { name, arguments }).into_expression(pos))
+        Ok((ExpressionKind::FunctionCall { name, arguments }).into_expression(start_pos.merge(end_pos)))
     }
 
     fn check(&self, pointer: &usize, typ: TokenType) -> CodeResult<bool> {
@@ -330,20 +329,21 @@ impl<'a> Parser<'a> {
         if let Some(token) = token {
             match token.token_type {
                 TokenType::Identifier => {
+                    self.advance(pointer);
+                    let mav = self.parse_mav(pointer)?;
+                    *pointer -= 1;
                     if self.match_next_token(pointer, TokenType::LParen)? {
-                        Ok(AST::Expression { expr: self.parse_function_call(pointer, token)? })
+                        Ok(AST::Expression { expr: self.parse_function_call(pointer, mav)? })
                     } else if self.match_next_token(pointer, TokenType::Equals)? {
                         self.advance(pointer);
-                        Ok(AST::VariableReassign {name: token, value: self.parse_expression(pointer)?})
+                        Ok(AST::VariableReassign {name: mav, value: self.parse_expression(pointer)?})
                     } else {
-                        let a = *pointer;
-                        let res = self.parse_expression(pointer);
-                        let cpos = self.codepos_from_space(a, pointer, 1);
+                        let cpos = mav.ensured_compute_codeposition();
                         self.warning(CodeWarning::new_unnecessary_code(
                             cpos,
                             None,
                         ));
-                        Ok(AST::Expression { expr: res? })
+                        Ok(AST::Expression { expr: Expression { expression: ExpressionKind::ModuleAccess(mav), code_position: cpos } })
                     }
                 }
                 TokenType::NumberInt | TokenType::NumberFloat => {
@@ -376,7 +376,7 @@ impl<'a> Parser<'a> {
                         Some(self.parse_expression(pointer)?)
                     } else {None};
                     if typ.is_none() && value.is_none() {
-                        return Err(CodeError::invalid_vardef(name, typ.is_some()))
+                        return Err(CodeError::invalid_vardef(name.code_position, typ.is_some()))
                     }
                     Ok(AST::VariableDef {name, typ, value})
                 }
@@ -472,6 +472,16 @@ impl<'a> Parser<'a> {
             Ok((ExpressionKind::CastExpr {expr: Box::new(term), typ: self.parse_type(pointer)?}).into_expression(cpos))
         } else {
             Ok(term)
+        }
+    }
+    
+    fn parse_mav(&self, pointer: &mut usize) -> CodeResult<ModuleAccessVariant> {
+        let ident = self.previous(pointer).unwrap();
+        let parent = ModuleAccessVariant::Base { name: ident.content.to_owned(), cpos: ident.code_position };
+        if self.match_token(pointer, TokenType::ModuleAccess)? {
+            Ok(ModuleAccessVariant::Double(Box::new(parent), Box::new(self.parse_mav(pointer)?)))
+        } else {
+            Ok(parent)
         }
     }
 
@@ -611,7 +621,8 @@ impl<'a> Parser<'a> {
                 }
                 TokenType::New => {
                     let start = token.code_position;
-                    let name = self.consume(pointer, TokenType::Identifier, None)?;
+                    self.advance(pointer);
+                    let name = self.parse_mav(pointer)?;
                     self.consume(pointer, TokenType::LParen, None)?;
                     let mut arguments = Vec::new();
                     if !self.check(pointer, TokenType::RParen)? {
@@ -629,13 +640,14 @@ impl<'a> Parser<'a> {
                     Ok((ExpressionKind::New {name, arguments}).into_expression(start.merge(self.tokens[*pointer - 1].code_position)))
                 }
                 TokenType::Identifier => {
-                    let name_tok = token;
+                    let mav_name = self.parse_mav(pointer)?;
                     if let Some(next) = self.peek(pointer) {
                         if next.token_type == TokenType::LParen {
-                            return self.parse_function_call(pointer, name_tok);
+                            return self.parse_function_call(pointer, mav_name);
                         }
                     }
-                    Ok(Expression { expression: ExpressionKind::Identifier(name_tok), code_position: name_tok.code_position })
+                    let code_position = mav_name.ensured_compute_codeposition();
+                    Ok(Expression { expression: ExpressionKind::ModuleAccess(mav_name), code_position })
                 }
                 TokenType::NumberInt => {
                     let val = token.content.parse().unwrap();
@@ -660,7 +672,7 @@ impl<'a> Parser<'a> {
                     ),
                 )),
             }
-        }
+    }
 
     fn parse_type(&self, pointer: &mut usize) -> CodeResult<Types> {
         let mut kind =
@@ -674,8 +686,10 @@ impl<'a> Parser<'a> {
             else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
             else if self.match_token(pointer, TokenType::Ptr)? { Ok(TypesKind::Pointer) }
             else if self.match_token(pointer, TokenType::Bool)? { Ok(TypesKind::Bool) }
-            else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.tokens[*pointer - 1].content.clone() }) }
+            else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.parse_mav(pointer)? }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))})?;
+        
+        let start = self.previous(pointer).unwrap().code_position;
 
         loop {
             if self.match_token(pointer, TokenType::Star)? {
@@ -684,8 +698,8 @@ impl<'a> Parser<'a> {
                 break
             }
         }
-
-        Ok(Types::new(kind, &self.tokens[*pointer - 1]))
+        let cpos = start.merge(self.previous(pointer).unwrap().code_position);
+        Ok(Types {kind, cpos })
     }
 }
 
@@ -746,8 +760,7 @@ impl Into<Linkage> for FunctionMode {
     }
 }
 
-#[derive(Debug, Hash, Clone)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypesKind {
     I32,
     F32,
@@ -759,7 +772,7 @@ pub enum TypesKind {
     Void,
     Ptr(Box<TypesKind>),
     Pointer,
-    Struct {name: String},
+    Struct {name: ModuleAccessVariant},
     Function {ret: Box<TypesKind>, params: Vec<TypesKind>},
     Bool,
 }
@@ -784,15 +797,87 @@ impl Display for TypesKind {
     }
 }
 
-#[derive(Debug, Hash, Clone)]
-pub struct Types<'a> {
+#[derive(Debug, Clone)]
+pub struct Types {
     pub kind: TypesKind,
-    pub token: &'a Token
+    pub cpos: CodePosition
 }
 
-impl<'a> Types<'a> {
-    pub fn new(kind: TypesKind, token: &'a Token) -> Self {
-        Self {kind, token}
+#[derive(Debug, Clone)]
+pub enum ModuleAccessVariant {
+    Base {
+        name: String,
+        cpos: CodePosition
+    },
+    Double(Box<ModuleAccessVariant>, Box<ModuleAccessVariant>)
+}
+
+// Ignore cpos when comparing
+impl PartialEq for ModuleAccessVariant {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                ModuleAccessVariant::Base { name: name1, .. },
+                ModuleAccessVariant::Base { name: name2, .. },
+            ) => name1 == name2,
+
+            (
+                ModuleAccessVariant::Double(left1, right1),
+                ModuleAccessVariant::Double(left2, right2),
+            ) => left1 == left2 && right1 == right2,
+
+            _ => false,
+        }
+    }
+}
+
+impl ModuleAccessVariant {
+    fn spec_compute_codeposition(&self) -> Option<CodePosition> {
+        match self {
+            ModuleAccessVariant::Base { cpos, .. } => Some(cpos.clone()),
+            ModuleAccessVariant::Double(left, right) => {
+                match (left.spec_compute_codeposition(), right.spec_compute_codeposition()) {
+                    (Some(c1), Some(c2)) => Some(c1.merge(c2)),
+                    (Some(c), None) | (None, Some(c)) => Some(c),
+                    (None, None) => None,
+                }
+            }
+        }
+    }
+    
+    pub fn ensured_compute_codeposition(&self) -> CodePosition {
+        self.spec_compute_codeposition().unwrap()
+    }
+
+    fn collect_names(&self, names: &mut Vec<String>) {
+        match self {
+            ModuleAccessVariant::Base { name, .. } => names.push(name.clone()),
+            ModuleAccessVariant::Double(left, right) => {
+                left.collect_names(names);
+                right.collect_names(names);
+            }
+        }
+    }
+
+    pub fn last_name(&self) -> Option<String> {
+        match self {
+            ModuleAccessVariant::Base { name, .. } => Some(name.to_owned()),
+            ModuleAccessVariant::Double(_, right) => right.last_name(),
+        }
+    }
+    
+    pub fn name(&self) -> String {
+        let mut names = Vec::new();
+        self.collect_names(&mut names);
+        names.join("::")
+    }
+}
+
+impl Display for ModuleAccessVariant {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut names = Vec::new();
+        self.collect_names(&mut names);
+        write!(f, "{}", names.join("::"))
     }
 }
 
@@ -806,16 +891,17 @@ pub enum ExpressionKind<'a> {
         value: f64,
         token: &'a Token,
     },
-    Identifier(&'a Token),
+    // Identifier(&'a Token),
     String(&'a Token),
+    ModuleAccess(ModuleAccessVariant),
     BinaryOp { lhs: Box<Expression<'a>>, op: (&'a Token, BinaryOp), rhs: Box<Expression<'a>> },
-    CastExpr { expr: Box<Expression<'a>>, typ: Types<'a> },
-    FunctionCall { name: & 'a Token, arguments: Vec<Expression<'a>> },
+    CastExpr { expr: Box<Expression<'a>>, typ: Types },
+    FunctionCall { name: ModuleAccessVariant, arguments: Vec<Expression<'a>> },
     Reference { var: &'a Token },
     Dereference { var: &'a Token },
     Malloc { amount: Box<Expression<'a>> },
     Free { var: Box<Expression<'a>> },
-    New { name: & 'a Token, arguments: Vec<Expression<'a>> },
+    New { name: ModuleAccessVariant, arguments: Vec<Expression<'a>> },
     Access { parent: Box<Expression<'a>>, child: &'a Token, ptr: bool }
 }
 
@@ -880,13 +966,14 @@ impl Display for VirtualDirectiveArgType {
 }
 
 pub fn format_virtual_type_sig(name: &str, sig: Vec<VirtualDirectiveArgType>) -> String {
+    // TODO: Remove the empty space if sig is empty
     format!("({name} {})", sig.iter().map(|x| {format!("`{x}`")}).collect::<Vec<String>>().join(" "))
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum DirectiveExpr<'a> {
-    Literal(DirectiveArgType<'a>), // For simple arguments
-    NestedDirective(Box<Directive<'a>>), // For nested directives like (ON_OS windows)
+    Literal(DirectiveArgType<'a>),
+    NestedDirective(Box<Directive<'a>>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -902,12 +989,12 @@ pub enum AST<'a> {
     FunctionDef {
         name: & 'a Token,
         fmode: FunctionMode,
-        ret: Types<'a>,
-        params: Vec<(& 'a Token, Types<'a>)>,
+        ret: Types,
+        params: Vec<(& 'a Token, Types)>,
         body: Option<Vec<AST<'a>>>,
     },
-    VariableDef { name: & 'a Token, value: Option<Expression<'a>>, typ: Option<Types<'a>> },
-    VariableReassign { name: & 'a Token, value: Expression<'a> },
+    VariableDef { name: &'a Token, value: Option<Expression<'a>>, typ: Option<Types> },
+    VariableReassign { name: ModuleAccessVariant, value: Expression<'a> },
     Return(Option<Expression<'a>>, &'a Token),
     IfCondition {
         first: CondBlock<'a>,
@@ -919,7 +1006,7 @@ pub enum AST<'a> {
     Continue(&'a Token),
     Struct {
         name: &'a Token,
-        members: Vec<(&'a Token, Types<'a>)>
+        members: Vec<(&'a Token, Types)>
     },
     Directive(Directive<'a>)
 }

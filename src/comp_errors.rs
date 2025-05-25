@@ -4,7 +4,7 @@ use crate::lexer::{CodePosition, Token, TokenType};
 use colorize_rs::AnsiColor;
 use std::fmt;
 use num_derive::FromPrimitive;
-use crate::parser::{format_virtual_type_sig, TypesKind, VirtualDirectiveArgType};
+use crate::parser::{format_virtual_type_sig, ModuleAccessVariant, TypesKind, VirtualDirectiveArgType};
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -142,9 +142,9 @@ impl CodeError {
         )
     }
 
-    pub fn void_type(token: &Token) -> Self {
+    pub fn void_type(cpos: CodePosition) -> Self {
         Self::new(
-            token.code_position,
+            cpos,
             CodeErrorType::UnallowedVoid,
             "Void type is only allowed for functions".to_string(),
             Some("But was used here".to_string()),
@@ -164,10 +164,10 @@ impl CodeError {
         )
     }
 
-    pub fn invalid_vardef(token: &Token, t: bool) -> Self {
+    pub fn invalid_vardef(cpos: CodePosition, t: bool) -> Self {
         let note = (if t {"Add a type"} else {"Add a value"}).to_string();
         Self::new(
-            token.code_position,
+            cpos,
             CodeErrorType::InvalidVarDef,
             "Invalid variable definition".to_string(),
             Some("Concerning this variable".to_string()),
@@ -198,9 +198,9 @@ impl CodeError {
         )
     }
 
-    pub fn argument_count(token: &Token, got: usize, requires: usize) -> Self {
+    pub fn argument_count(code_position: CodePosition, got: usize, requires: usize) -> Self {
         Self::new(
-            token.code_position,
+            code_position,
             CodeErrorType::FunctionArgumentCount,
             "Wrong amount of arguments".to_string(),
             Some("help: adjust the argument count you are passing".to_string()),
@@ -209,9 +209,9 @@ impl CodeError {
         )
     }
 
-    pub fn invalid_cast(token: &Token, new_typ: &TypesKind, expr_typ: &TypesKind) -> Self {
+    pub fn invalid_cast(code_position: CodePosition, new_typ: &TypesKind, expr_typ: &TypesKind) -> Self {
         Self::new(
-            token.code_position,
+            code_position,
             CodeErrorType::Unable2Cast,
             "Unable to cast incompatible types".to_string(),
             Some(format!("Cast as type `{new_typ}`")),
@@ -297,6 +297,29 @@ impl CodeError {
         )
     }
 
+    pub fn prim_symbol_not_found(name: &String, code_position: CodePosition) -> Self {
+        Self::new(
+            code_position,
+            CodeErrorType::SymbolNotFound,
+            "Symbol was not found".to_string(),
+            Some("This symbol".to_string()),
+            format!("The name `{name}` is referenced here, but can't be resolved"),
+            vec![]
+        )
+    }
+
+    pub fn prim_module_not_found(name: &String, code_position: CodePosition) -> Self {
+        todo!("MAKE");
+        Self::new(
+            code_position,
+            CodeErrorType::SymbolNotFound,
+            "Symbol was not found".to_string(),
+            Some("This symbol".to_string()),
+            format!("The name `{name}` is referenced here, but can't be resolved"),
+            vec![]
+        )
+    }
+
     pub fn field_not_found(token: &Token, struct_name: &String) -> Self {
         Self::new(
             token.code_position,
@@ -375,13 +398,13 @@ impl CodeError {
         )
     }
 
-    pub fn symbol_not_a_function(token: &Token) -> Self {
+    pub fn symbol_not_a_function(mav: &ModuleAccessVariant) -> Self {
         Self::new(
-            token.code_position,
+            mav.ensured_compute_codeposition(),
             CodeErrorType::NotAFunction,
             "Symbol is not a function".to_string(),
             Some("Called here".to_string()),
-            format!("The name `{}` is found, but not a symbol", token.content),
+            format!("The name `{mav}` is found, but not a symbol"),
             vec![]
         )
     }
