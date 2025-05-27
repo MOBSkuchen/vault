@@ -3,9 +3,6 @@ use std::fmt::{Display, Formatter};
 use clap::{Arg, ValueHint};
 use clap_builder::Command;
 use inkwell::context::Context;
-use inkwell::llvm_sys::LLVMModule;
-use inkwell::llvm_sys::prelude::LLVMModuleRef;
-use inkwell::module::Module;
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lld_rx::LldFlavor;
 use crate::codegen::Codegen;
@@ -224,6 +221,8 @@ impl From<CompilerError> for MixedError {
         Self::CompilerError(value)
     }
 }
+
+pub type MixedResult<T> = Result<T, MixedError>;
 
 fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> Result<CompilationConfig, MixedError> {
     let tokens = tokenize(file_manager.get_content())?;

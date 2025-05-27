@@ -186,14 +186,24 @@ impl<'a> Parser<'a> {
 
     fn parse_import(&self, pointer: &mut usize) -> CodeResult<AST> {
         self.consume(pointer, TokenType::Import, None)?;
-        
+
+        // Case 2: import "path" => <module>
+        if self.match_token(pointer, TokenType::String)? {
+            let path = Some(self.consume(pointer, TokenType::String, None)?);
+            self.consume(pointer, TokenType::As, Some("expected '=>' after path".to_string()))?;
+            let module = self.consume(pointer, TokenType::Identifier, None)?;
+            return Ok(AST::Import { module, path, name: None });
+        }
+
+        // Case 1 or 3: import <module> [as <name>]
         let module = self.consume(pointer, TokenType::Identifier, None)?;
-        
-        let path = if self.match_token(pointer, TokenType::As)? { 
-            Some(self.consume(pointer, TokenType::String, None)?)
-        } else { None };
-        
-        Ok(AST::Import { module, path })
+        let name = if self.match_token(pointer, TokenType::As)? {
+            Some(self.consume(pointer, TokenType::Identifier, None)?)
+        } else {
+            None
+        };
+
+        Ok(AST::Import { module, path: None, name })
     }
 
     pub fn parse_function(&self, pointer: &mut usize) -> CodeResult<AST> {
@@ -473,7 +483,7 @@ impl<'a> Parser<'a> {
             Ok(term)
         }
     }
-    
+
     fn parse_mav(&self, pointer: &mut usize) -> CodeResult<ModuleAccessVariant> {
         let ident = self.previous(pointer).unwrap();
         let parent = ModuleAccessVariant::Base { name: ident.content.to_owned(), cpos: ident.code_position };
@@ -688,7 +698,7 @@ impl<'a> Parser<'a> {
             else if self.match_token(pointer, TokenType::Bool)? { Ok(TypesKind::Bool) }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.parse_mav(pointer)? }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))})?;
-        
+
         let start = self.previous(pointer).unwrap().code_position;
 
         loop {
@@ -844,7 +854,7 @@ impl ModuleAccessVariant {
             }
         }
     }
-    
+
     pub fn ensured_compute_codeposition(&self) -> CodePosition {
         self.spec_compute_codeposition().unwrap()
     }
@@ -865,7 +875,7 @@ impl ModuleAccessVariant {
             ModuleAccessVariant::Double(_, right) => right.last_name(),
         }
     }
-    
+
     pub fn name(&self) -> String {
         let mut names = Vec::new();
         self.collect_names(&mut names);
@@ -1009,5 +1019,5 @@ pub enum AST<'a> {
         members: Vec<(&'a Token, Types)>
     },
     Directive(Directive<'a>),
-    Import { module: & 'a Token, path: Option< & 'a Token> },
+    Import { module: & 'a Token, path: Option< & 'a Token>, name: Option<& 'a Token> },
 }

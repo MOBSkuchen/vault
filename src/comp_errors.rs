@@ -309,14 +309,13 @@ impl CodeError {
     }
 
     pub fn prim_module_not_found(name: &String, code_position: CodePosition) -> Self {
-        todo!("MAKE");
         Self::new(
             code_position,
             CodeErrorType::SymbolNotFound,
-            "Symbol was not found".to_string(),
-            Some("This symbol".to_string()),
-            format!("The name `{name}` is referenced here, but can't be resolved"),
-            vec![]
+            "Module was not found".to_string(),
+            Some("This module".to_string()),
+            format!("The module `{name}` is referenced here, but can't be resolved"),
+            vec![format!("You might want to add an import statement: `import {name}`")]
         )
     }
 

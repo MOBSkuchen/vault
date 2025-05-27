@@ -6,10 +6,10 @@ use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType, StructType};
-use inkwell::values::{AsValueRef, BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
+use inkwell::values::{BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
-use crate::DevDebugLevel;
+use crate::{DevDebugLevel, MixedResult};
 use crate::directives::{visit_directive, CompilationConfig};
 use crate::filemanager::FileManager;
 use crate::lexer::{tokenize, CodePosition, Token};
@@ -904,7 +904,7 @@ impl<'ctx> Compiler<'ctx> {
         print_code_warn(code_warning, self.file_manager);
     }
 
-    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager, used_modules: &mut std::vec::Vec<inkwell::module::Module<'a>>) -> CodeResult<(Module<'a>, Namespace)> {
+    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> MixedResult<(Module<'a>, Namespace)> {
         let mut global_scope = Namespace::new();
         let mut should_do = true;
         
@@ -916,14 +916,14 @@ impl<'ctx> Compiler<'ctx> {
                 AST::Struct { name, members } if should_do => {
                     self.visit_struct(name, members, &mut global_scope)?;
                 }
-                AST::Import { module: m, path } if should_do => {
+                AST::Import { module: m, path, name } if should_do => {
                     let path = if let Some(p) = path {
                         p.content.clone()
                     } else {format!("{m}.sl")};
 
                     let dev_debug_level = DevDebugLevel::Full;
 
-                    let new_file_manager = FileManager::new_from(path).unwrap();
+                    let new_file_manager = FileManager::new_from(path)?;
 
                     let tokens = tokenize(new_file_manager.get_content())?;
 
@@ -939,7 +939,7 @@ impl<'ctx> Compiler<'ctx> {
                     }
 
                     let new_module = self.context.create_module(&m.content);
-                    let (md, scope) = self.comp_ast(new_module, ast, compilation_config, &new_file_manager, used_modules).expect("FAILED");
+                    let (md, scope) = self.comp_ast(new_module, ast, compilation_config, &new_file_manager).expect("FAILED");
                     
                     // Copy over DECLARED, but not defined functions. These do NOT get linked in.
                     let mut copied_functions = HashMap::new();
@@ -973,14 +973,14 @@ impl<'ctx> Compiler<'ctx> {
 
                     let mut copied_definitions = HashMap::new();
                     for def in scope.definitions {
-                        println!("{:#?}", def);
                         let gval = module.get_global(&def.0).map(|t| t.as_pointer_value());
                         copied_definitions.insert(def.0, (def.1.0, gval.unwrap()));
                     }
                     
                     let new_scope = Namespace {definitions: copied_definitions, functions: copied_functions, struct_order: copied_struct_order, structs: copied_structs, modules: copied_modules};
                     
-                    global_scope.modules.insert(m.content.clone(), new_scope);
+                    let name = name.map(|t1| t1.content.clone()).or_else(|| {Some(m.content.clone())});
+                    global_scope.modules.insert(name.unwrap(), new_scope);
                 }
                 // TODO: Add an optional body to directives
                 AST::Directive(directive) => {
@@ -993,26 +993,8 @@ impl<'ctx> Compiler<'ctx> {
         Ok((module, global_scope))
     }
 
-    pub fn compile<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<Module<'a>> {
-        let mut used_modules = vec![];
-        let (md, _) = self.comp_ast(module, ast, compilation_config, &file_manager, &mut used_modules)?;
+    pub fn compile<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> MixedResult<Module<'a>> {
+        let (md, _) = self.comp_ast(module, ast, compilation_config, file_manager)?;
         Ok(md)
     }
-}
-
-fn llvm_link2_modules(m1: &Module, m2: &Module) -> Result<bool, String> {
-    use inkwell::llvm_sys::linker::LLVMLinkModules2;
-
-    // let char_ptr: *mut libc::c_char = ptr::null_mut();
-    
-    let code = unsafe { LLVMLinkModules2(m1.as_mut_ptr(), m2.as_mut_ptr()) };
-
-    // if code == 1 {
-    //     debug_assert!(!char_ptr.is_null());
-// 
-    //     unsafe { Err(char_ptr.as_ref().unwrap().to_string()) }
-    // } else {
-    //     Ok(())
-    // }
-    Ok(code == 0)
 }
