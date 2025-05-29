@@ -255,13 +255,13 @@ impl<'a> Parser<'a> {
             }
 
             let mut stmt = self.parse_statement(pointer)?;
-            
-            if self.match_token(pointer, TokenType::Equals)? { 
+
+            if self.match_token(pointer, TokenType::Equals)? {
                 if let AST::Expression { expr } = stmt {
                     stmt = AST::AccessReassign {expr, value: self.parse_expression(pointer)?}
                 }
             }
-            
+
             statements.push(*Box::new(stmt));
 
             if !self.match_token(pointer, TokenType::SemiColon)? {
@@ -485,8 +485,9 @@ impl<'a> Parser<'a> {
         let a = *pointer;
         let term = self.parse_term(pointer)?;
         if self.match_token(pointer, TokenType::As)? {
+            let typ = self.parse_type(pointer)?;
             let cpos = self.codepos_from_space(a, pointer, 1);
-            Ok((ExpressionKind::CastExpr {expr: Box::new(term), typ: self.parse_type(pointer)?}).into_expression(cpos))
+            Ok((ExpressionKind::CastExpr {expr: Box::new(term), typ}).into_expression(cpos))
         } else {
             Ok(term)
         }

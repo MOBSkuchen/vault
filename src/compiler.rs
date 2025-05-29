@@ -10,7 +10,7 @@ use inkwell::types::{AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
 use inkwell::values::{BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
-use crate::{DevDebugLevel, MixedResult};
+use crate::{MixedResult};
 use crate::directives::{visit_directive, CompilationConfig};
 use crate::filemanager::FileManager;
 use crate::lexer::{tokenize, CodePosition, Token};
@@ -457,26 +457,11 @@ impl<'ctx> Compiler<'ctx> {
                         match &new_type.kind {
                             TypesKind::F32 | TypesKind::F64 => {
                                 let dest_type = real_new_typ.into_float_type();
-                                let src_size = float_val.get_type().size_of().get_sign_extended_constant();
-                                let dest_size = dest_type.size_of().get_sign_extended_constant();
 
-                                match (src_size, dest_size) {
-                                    (Some(src), Some(dest)) if src < dest => {
-                                        self.builder
-                                            .build_float_ext(float_val, dest_type, "")
-                                            .map(|v| v.as_basic_value_enum())
-                                            .ok()
-                                    }
-                                    (Some(src), Some(dest)) if src > dest => {
-                                        self.builder
-                                            .build_float_trunc(float_val, dest_type, "")
-                                            .map(|v| v.as_basic_value_enum())
-                                            .ok()
-                                    }
-                                    _ => {
-                                        return Ok((Box::new(value), old_type));
-                                    }
-                                }
+                                self.builder
+                                    .build_float_cast(float_val, dest_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
                             }
                             TypesKind::I32 | TypesKind::I64 | TypesKind::U32 | TypesKind::U64 | TypesKind::U8 => {
                                 self.builder
