@@ -1,0 +1,27 @@
+// Fibonacci Sequence in VAULT
+
+import "vault-stdlib/stdlib.vt" => stdlib
+
+def fib(n: i64): i64 {
+    if n <= 1 {
+        return n
+    } else {
+        return fib(n - 1) + fib(n - 2)
+    }
+}
+
+def export main(): void {
+    stdlib::print("Fibonacci number: ");
+    let result = |> 256;
+    stdlib::ptr_input(result, 256);
+    let num = 0;
+    let erc = stdlib::str_to_int(result, &num);
+    if erc != 0 {
+        stdlib::print("Int prompt failed!");
+        return;
+    };
+    stdlib::print("fib(");
+    stdlib::print_int(num);
+    stdlib::print(") = ");
+    stdlib::print_int(fib(num => i64) => i32)
+}

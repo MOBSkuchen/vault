@@ -1,0 +1,21 @@
+// File find and replace
+
+import "vault-stdlib/stdlib.vt" => stdlib
+
+def prompt(q: u8*, max: u32): u8* {
+    stdlib::print(q);
+    let result = |> max;
+    stdlib::ptr_input(result, max => i32);
+    return result
+}
+
+def export main(): void {
+    let filename = prompt("Enter filename: ", 256);
+    let query = prompt("Enter query: ", 256);
+    let repl = prompt("Enter replace: ", 256);
+
+    let content = stdlib::readFileToString(filename);
+    content = stdlib::replaceAll(content, query, repl);
+    stdlib::println("New content:");
+    stdlib::print(content);
+}
