@@ -7,7 +7,7 @@ use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType, StructType};
-use inkwell::values::{BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntMathValue, IntValue, PointerValue};
+use inkwell::values::{BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::{MixedResult};
@@ -632,8 +632,8 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
-        let mut inside_loop = after_block.is_some();
+    fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, loop_after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
+        let mut inside_loop = loop_after_block.is_some();
         let mut returns = false;
         // Returns: inside_loop, returns
         
@@ -724,7 +724,7 @@ impl<'ctx> Compiler<'ctx> {
                 return Ok((inside_loop, false));
             }
             AST::IfCondition { first, other, elif } => {
-                let after_block = function.new_block("if_after", false);
+                let if_after_block = function.new_block("if_after", false);
 
                 let mut cond_blocks = vec![(&first, function.new_block("if_cond0", false))];
                 let mut body_blocks = vec![function.new_block("if_body0", false)];
@@ -770,7 +770,7 @@ impl<'ctx> Compiler<'ctx> {
 
                     let next_cond_bb = cond_blocks.get(i + 1).map(|(_, bb)| *bb)
                         .or(else_bb)
-                        .unwrap_or(after_block);
+                        .unwrap_or(if_after_block);
 
                     self.builder
                         .build_conditional_branch(cond, body_bb, next_cond_bb)
@@ -786,7 +786,7 @@ impl<'ctx> Compiler<'ctx> {
                             function,
                             stmt.clone(),
                             global_scope,
-                            Some(after_block),
+                            loop_after_block,
                             Some(&body_bb)
                         )?;
                         returns = continue_block.1;
@@ -797,7 +797,7 @@ impl<'ctx> Compiler<'ctx> {
 
                     if !returns {
                         self.builder
-                            .build_unconditional_branch(after_block)
+                            .build_unconditional_branch(if_after_block)
                             .expect("Failed to build jump (IF4)");
                     }
                 }
@@ -811,7 +811,7 @@ impl<'ctx> Compiler<'ctx> {
                                 function,
                                 stmt.clone(),
                                 global_scope,
-                                Some(after_block),
+                                loop_after_block,
                                 Some(&else_bb)
                             )?;
                             returns = continue_block.1;
@@ -822,21 +822,21 @@ impl<'ctx> Compiler<'ctx> {
 
                         if !returns {
                             self.builder
-                                .build_unconditional_branch(after_block)
+                                .build_unconditional_branch(if_after_block)
                                 .expect("Failed to build jump (IF4)");
                         }
                     }
                 }
 
-                self.builder.position_at_end(after_block);
+                self.builder.position_at_end(if_after_block);
                 
                 if other.is_some() && returns {
                     self.builder.build_unreachable().expect("Failed to make after unreachable");
                 }
             }
             AST::Break(tok) => {
-                if let Some(after) = after_block {
-                    self.builder.position_at_end(after);
+                if let Some(after) = loop_after_block {
+                    self.builder.build_unconditional_branch(after).expect("Failed to uncond branch break");
                     inside_loop = false;
                 } else {
                     return Err(CodeError::loop_stmt_outside_loop(&tok.code_position, &tok.token_type))
@@ -904,7 +904,6 @@ impl<'ctx> Compiler<'ctx> {
                                          body: Option<Vec<AST>>, attached: Option<TypesKind>) -> CodeResult<()>
     {
         let fn_type = self.convert_type_function(&return_type.kind, params.iter().map(|x| {x.1.kind.clone()}).collect(), global_scope, name.code_position)?;
-        
         if let Some((_, already_defined, _)) = global_scope.functions.get(&name.content) { 
             if *already_defined {
                 return Err(CodeError::already_exists(true, name))
