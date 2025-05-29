@@ -244,7 +244,7 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
     let module = context.create_module(&compile_job_data.module_id);
     let compiler = Compiler::new(&context, &builder, compile_job_data.module_id, file_manager);
 
-    let mut compilation_config = CompilationConfig::new(compile_job_data.debug);
+    let mut compilation_config = CompilationConfig::new(compile_job_data.debug, compile_job_data.dev_debug_level);
     let module = compiler.compile(module, ast, &mut compilation_config, file_manager)?;
     if compile_job_data.dev_debug_level as u32 >= 1 {
         println!("LLVM-Module (pre optimize):");

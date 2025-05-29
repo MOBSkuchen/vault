@@ -1,16 +1,18 @@
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
+use crate::DevDebugLevel;
 use crate::filemanager::FileManager;
 use crate::parser::{Directive, DirectiveArgType, DirectiveExpr, VirtualDirectiveArgType};
 
 pub struct CompilationConfig {
     debug: bool,
-    pub libs: Vec<String>
+    pub libs: Vec<String>,
+    pub dev_debug_level: DevDebugLevel
 }
 
 impl CompilationConfig {
-    pub fn new(debug: bool) -> Self {
-        Self {debug, libs: Vec::new()}
+    pub fn new(debug: bool, dev_debug_level: DevDebugLevel) -> Self {
+        Self {debug, libs: Vec::new(), dev_debug_level}
     }
 }
 

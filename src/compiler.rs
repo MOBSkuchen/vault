@@ -1016,21 +1016,19 @@ impl<'ctx> Compiler<'ctx> {
                     let path = if let Some(p) = path {
                         p.content.clone()
                     } else {format!("{m}.sl")};
-
-                    let dev_debug_level = DevDebugLevel::Full;
-
+                    
                     let new_file_manager = FileManager::new_from(path)?;
 
                     let tokens = tokenize(new_file_manager.get_content())?;
 
-                    if dev_debug_level as u32 >= 2 {
+                    if compilation_config.dev_debug_level as u32 >= 2 {
                         println!("Parsed Tokens:\n{:#?}", tokens);
                     }
 
                     let parser = Parser::new(tokens, &new_file_manager);
                     let ast = parser.parse(&mut 0)?;
 
-                    if dev_debug_level as u32 >= 2 {
+                    if compilation_config.dev_debug_level as u32 >= 2 {
                         println!("Parsed AST:\n{:#?}", ast);
                     }
 
