@@ -254,7 +254,14 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            let stmt = self.parse_statement(pointer)?;
+            let mut stmt = self.parse_statement(pointer)?;
+            
+            if self.match_token(pointer, TokenType::Equals)? { 
+                if let AST::Expression { expr } = stmt {
+                    stmt = AST::AccessReassign {expr, value: self.parse_expression(pointer)?}
+                }
+            }
+            
             statements.push(*Box::new(stmt));
 
             if !self.match_token(pointer, TokenType::SemiColon)? {
@@ -1025,6 +1032,7 @@ pub enum AST<'a> {
     },
     VariableDef { name: &'a Token, value: Option<Expression<'a>>, typ: Option<Types> },
     VariableReassign { name: ModuleAccessVariant, value: Expression<'a> },
+    AccessReassign { expr: Expression<'a>, value: Expression<'a> },
     Return(Option<Expression<'a>>, &'a Token),
     IfCondition {
         first: CondBlock<'a>,

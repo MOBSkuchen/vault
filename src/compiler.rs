@@ -849,7 +849,35 @@ impl<'ctx> Compiler<'ctx> {
                 } else {
                     return Err(CodeError::loop_stmt_outside_loop(&tok.code_position, &tok.token_type))
                 }
-            },
+            }
+            AST::AccessReassign {expr, value} => {
+                let cpos = expr.code_position.merge(value.code_position);
+                let (val_ptr, val_typ) = self.visit_expr(
+                    function,
+                    global_scope,
+                    expr,
+                    None,
+                    true)?;
+                
+                let (assign_val, assign_typ) = self.visit_expr(
+                    function,
+                    global_scope,
+                    value,
+                    Some(&TypesKind::Ptr(Box::new(val_typ.clone()))),
+                    true)?;
+                
+                match &val_typ {
+                    TypesKind::Pointer => {}
+                    TypesKind::Ptr(underlying) => {
+                        if assign_typ != **underlying { return Err(CodeError::struct_reassignment(&cpos, &val_typ, &assign_typ)); }
+                    }
+                    _ => {
+                        return Err(CodeError::struct_reassignment(&cpos, &val_typ, &assign_typ));
+                    }
+                }
+                
+                self.builder.build_store(val_ptr.as_basic_value_enum().into_pointer_value(), assign_val.as_basic_value_enum()).expect("Failed to restore");
+            }
             AST::Continue(tok) => if let Some(current) = cur_block {
                 self.builder.position_at_end(*current);
             } else {
@@ -873,7 +901,8 @@ impl<'ctx> Compiler<'ctx> {
             AST::Continue(tok) => tok.code_position,
             AST::Struct { name, .. } => name.code_position,
             AST::Directive(d) => d.code_position,
-            &AST::Import { module: m, .. } => m.code_position,
+            AST::Import { module: m, .. } => m.code_position,
+            AST::AccessReassign { expr, value } => expr.code_position.merge(value.code_position),
         }
     }
 

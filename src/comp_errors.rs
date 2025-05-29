@@ -73,6 +73,7 @@ pub enum CodeErrorType {
     WrongFirstMethodParam,
     ReservedName,
     UnknownMemberFunction,
+    StructReassignmentTypeMismatch,
 }
 
 #[derive(Debug)]
@@ -264,6 +265,17 @@ impl CodeError {
             Some(format!("This is of type `{got}`")),
             format!("Expected type `{requires}`, but got type `{got}`"),
             notes
+        )
+    }
+
+    pub fn struct_reassignment(pos: &CodePosition, got: &TypesKind, requires: &TypesKind) -> Self {
+        Self::new(
+            *pos,
+            CodeErrorType::StructReassignmentTypeMismatch,
+            "Struct property reassignment type mismatch".to_string(),
+            Some(format!("lhs of type `{got}` and rhs of type `{requires}`")),
+            "To reassign a property of a struct the lhs of the assignment must be pointer to the type, and the rhs must be of that type".to_string(),
+            vec!["If you're using '.': use `stct~prop = value` => '~' instead of '.'".to_string()]
         )
     }
 
