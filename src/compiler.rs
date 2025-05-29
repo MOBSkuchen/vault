@@ -123,7 +123,7 @@ impl<'ctx> Compiler<'ctx> {
                     Ok(self.convert_type_normal(ptr, global_scope, cpos)?.ptr_type(AddressSpace::default()).as_type_ref())
                 }
                 TypesKind::Pointer => Ok(self.context.ptr_type(AddressSpace::default()).as_type_ref()),
-                TypesKind::I64 | TypesKind::U64 => Ok(self.context.i32_type().as_type_ref()),
+                TypesKind::I64 | TypesKind::U64 => Ok(self.context.i64_type().as_type_ref()),
                 TypesKind::F64 => Ok(self.context.f64_type().as_type_ref()),
                 TypesKind::U8 => Ok(self.context.i8_type().as_type_ref()),
                 TypesKind::Bool => Ok(self.context.custom_width_int_type(1).as_type_ref()),
