@@ -1007,7 +1007,7 @@ impl<'ctx> Compiler<'ctx> {
                 AST::Import { module: m, path, name } if should_do => {
                     let path = if let Some(p) = path {
                         p.content.clone()
-                    } else {format!("{m}.sl")};
+                    } else {format!("{m}.vt")};
 
                     let new_file_manager = FileManager::new_from(path)?;
 
