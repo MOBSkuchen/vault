@@ -4,6 +4,7 @@
 
 #include <stdio.h> // Required for size_t and printf
 #include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 
 #ifdef __cplusplus
@@ -47,6 +48,29 @@ void ptr_input(char* result, int max_input_size);
  * @param out The output integer.
  */
 int str_to_int(const char *str, int *out);
+
+/**
+ * @brief Replaces all occurrences of a specified search string with a replacement string
+ * within an original string. This function allocates new memory for the result.
+ * The caller is responsible for freeing the returned memory using `free()`.
+ *
+ * @param original A pointer to the null-terminated original string.
+ * @param search A pointer to the null-terminated substring to find.
+ * @param replace A pointer to the null-terminated string to replace found occurrences with.
+ * @return A pointer to the new dynamically allocated string with replacements, or NULL if
+ * memory allocation fails or any input string is NULL.
+ */
+char* replaceAll(const char* original, const char* search, const char* replace);
+
+/**
+ * @brief Reads the entire content of a file into a dynamically allocated string.
+ * The caller is responsible for freeing the returned memory using `free()`.
+ *
+ * @param filename The path to the file to read.
+ * @return A pointer to the dynamically allocated string containing the file's content,
+ * or NULL if the file cannot be opened, memory allocation fails, or the file is empty.
+ */
+char* readFileToString(const char* filename);
 
 #ifdef __cplusplus
 }

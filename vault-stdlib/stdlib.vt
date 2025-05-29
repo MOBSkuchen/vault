@@ -3,5 +3,7 @@ def extern println(s: u8*): void;
 def extern print(s: u8*): void;
 def extern ptr_input(s: u8*, m: i32): void;
 def extern str_to_int(s: u8*, r: i32*): i32;
+def extern replaceAll(c: u8*, s: u8*, r: u8*): u8*;
+def extern readFileToString(n: u8*): u8*;
 
 #(IFEI (OS "windows") (LINK "vault-stdlib-win.lib") (WARN "Currently, only windows is supported. To use this library you have to link the required functions yourself"))
