@@ -224,7 +224,7 @@ impl From<CompilerError> for MixedError {
 
 pub type MixedResult<T> = Result<T, MixedError>;
 
-fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> Result<CompilationConfig, MixedError> {
+fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> MixedResult<CompilationConfig> {
     let tokens = tokenize(file_manager.get_content())?;
     println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
     

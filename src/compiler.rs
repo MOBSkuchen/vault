@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hint::unreachable_unchecked;
 use std::ops::Deref;
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use inkwell::basic_block::BasicBlock;
@@ -233,14 +234,13 @@ impl<'ctx> Compiler<'ctx> {
         self.context.i32_type().const_zero()
     }
 
-    fn struct_access_type_mismatch_error(parent_cpos: &CodePosition, parent_type: &TypesKind) -> CodeError {
+    fn struct_access_type_mismatch_error(parent_cpos: &CodePosition, parent_type: &TypesKind, access: bool) -> CodeError {
         let mut notes = vec!["Can only access elements from struct (pointers)".to_string()];
         if matches!(parent_type, TypesKind::Struct { .. }) {
-            notes.push("As you are trying to access a field from a struct value, you might have forgotten to reference it?".to_string());
+            notes.push((if access {"Member functions accept struct pointers only. You might want to reference the value"} else {"As you are trying to access a field from a struct value, you might have forgotten to reference it?"}).to_string());
             CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Ptr(Box::new(parent_type.clone())), notes)
         } else {
-            todo!("Make type mismatch work");
-            // CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Struct { name: "struct".to_string() }, notes)
+            CodeError::type_mismatch(parent_cpos, parent_type, &TypesKind::Struct {name: ModuleAccessVariant::Base {name: "struct".to_string(), cpos: *parent_cpos }}, notes)
         }
     }
 
@@ -349,6 +349,57 @@ impl<'ctx> Compiler<'ctx> {
                         (Box::new(call.try_as_basic_value().left_or(self.null().as_basic_value_enum())), ret.as_ref().clone())
                     }
                     _ => Err(CodeError::symbol_not_a_function(&mav))?
+                }
+            }
+            ExpressionKind::AccessFCall { parent, child, arguments } => {
+                let parent_cpos = parent.code_position;
+                let (struct_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
+                let inner_struct_type;
+                let (_, stct_name) = match &parent_type {
+                    TypesKind::Ptr(ptr) => {
+                        match ptr.deref() {
+                            TypesKind::Struct { name: mav } => {
+                                inner_struct_type = ptr;
+                                let holder_scope = self.get_holder_scope(mav, Some(&function.function_scope), global_scope)?;
+                                (holder_scope.struct_order.get(&mav.last_name().unwrap()).unwrap(), mav)
+                            }
+                            _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type, true))
+                        }
+                    }
+                    _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type, true))
+                };
+                
+                let func_scope = self.get_holder_scope(stct_name, Some(&function.function_scope), global_scope)?;
+                if let Some(func) = func_scope.functions.get(&format!("__{child}_{}", stct_name.last_name().unwrap())) {
+                    match &func.2 {
+                        TypesKind::Function { params, ret } => {
+                            if let Some(hint) = type_hint {
+                                if must_use && *hint == TypesKind::Void {
+                                    return Err(CodeError::void_return(&expr.code_position));
+                                }
+                            }
+                            let mut h_args = vec![struct_value.as_basic_value_enum().into()];
+                            if arguments.len() != params.len()-1 {
+                                return Err(CodeError::argument_count(stct_name.ensured_compute_codeposition(), arguments.len(), params.len()))
+                            }
+                            for (count, arg) in arguments.into_iter().enumerate() {
+                                if count == 0 { continue }  // Skip `self`
+                                let cpos = arg.code_position;
+                                let (value, typ) = self.visit_expr(function, global_scope, arg, Some(&params[count]), true)?;
+                                if typ != params[count] {
+                                    return Err(CodeError::type_mismatch(&cpos, &typ, &params[count], vec![]));
+                                }
+                                h_args.push(value.deref().as_basic_value_enum().into());
+                            }
+                            // Call function, if it does not return a value (Void function) return null
+                            // In that case the return value will NOT be used, because of other Void checks
+                            let call = self.builder.build_call(func.0, h_args.as_slice(), "").expect("Failed to load");
+                            (Box::new(call.try_as_basic_value().left_or(self.null().as_basic_value_enum())), ret.as_ref().clone())
+                        }
+                        _ => Err(CodeError::symbol_not_a_function(&ModuleAccessVariant::Base { name: child.content.clone(), cpos: child.code_position }))?
+                    }
+                } else {
+                    Err(CodeError::unknown_member_function(parent_cpos, &stct_name.name(), child))?
                 }
             }
             ExpressionKind::String(string) => {
@@ -546,10 +597,10 @@ impl<'ctx> Compiler<'ctx> {
                                 let holder_scope = self.get_holder_scope(mav, Some(&function.function_scope), global_scope)?;
                                 (holder_scope.struct_order.get(&mav.last_name().unwrap()).unwrap(), mav)
                             }
-                            _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type))
+                            _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type, false))
                         }
                     }
-                    _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type))
+                    _ => return Err(Self::struct_access_type_mismatch_error(&parent_cpos, &parent_type, false))
                 };
                 if let Some(item) = stct.iter().position(|x1| {x1.0 == child.content}) {
                     let (_, field_type) = &stct[item];
@@ -691,7 +742,7 @@ impl<'ctx> Compiler<'ctx> {
                     body_blocks.push(function.new_block(&format!("elif_body{i}"), false));
                 }
 
-                let else_bb = if other.as_ref().map_or(false, |v| !v.is_empty()) {
+                let else_bb = if other.as_ref().is_some_and(|v| !v.is_empty()) {
                     Some(function.new_block("else_body", false))
                 } else {
                     None
@@ -829,7 +880,7 @@ impl<'ctx> Compiler<'ctx> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn visit_function_def<'a>(&'a self, module: &Module<'a>, name: &Token, fmode: FunctionMode, 
                                          return_type: Types, params: Vec<(&Token, Types)>, global_scope: &mut Namespace<'a>,
-                                         body: Option<Vec<AST>>) -> CodeResult<()>
+                                         body: Option<Vec<AST>>, attached: Option<TypesKind>) -> CodeResult<()>
     {
         let fn_type = self.convert_type_function(&return_type.kind, params.iter().map(|x| {x.1.kind.clone()}).collect(), global_scope, name.code_position)?;
         
@@ -839,15 +890,31 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
         
+        let fname = if let Some(att) = attached {
+            if params.is_empty() || params[0].1.kind != TypesKind::Ptr(Box::new(att.clone())) { 
+                return Err(CodeError::wrong_first_method_param(name, &params[0].1.kind))
+            } else {
+                match att {
+                    TypesKind::Struct { name: n, .. } => format!("__{}_{n}", name.content),
+                    _ => unsafe { unreachable_unchecked() }
+                }
+            }
+        } else {
+            let n = name.content.clone();
+            if n.starts_with("__") {
+                return Err(CodeError::reserved_name(name))
+            } else {
+                n
+            }
+        };
+        
         let typ = TypesKind::Function {ret: Box::new(return_type.kind.clone()), params: params.iter().map(|x1| {x1.1.kind.clone()}).collect()};
         
-        let function_value = module.add_function(&name.content, fn_type, Some(fmode.into()));
-        let mut function = Function::new(self, function_value, return_type.kind.clone(), name.content.clone());
+        let function_value = module.add_function(&fname, fn_type, Some(fmode.into()));
+        let mut function = Function::new(self, function_value, return_type.kind.clone(), fname.clone());
 
-        global_scope.functions.insert(name.content.clone(), (function_value, body.is_some(), typ));
-        // global_scope.definitions.insert(name.content.clone(), (TypesKind::Function {ret: Box::from(return_type.kind.clone()), 
-        //     params: params.iter().map(|x| {x.1.kind.clone()}).collect() }, unsafe { PointerValue::new(function_value.as_value_ref()) }));
-        
+        global_scope.functions.insert(fname, (function_value, body.is_some(), typ));
+   
         let mut inside_loop = false;
         let mut returns = false;
         
@@ -910,8 +977,8 @@ impl<'ctx> Compiler<'ctx> {
         
         for branch in ast {
             match branch {
-                AST::FunctionDef { ret, fmode, name, params, body } if should_do => {
-                    self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body)?;
+                AST::FunctionDef { ret, fmode, name, params, body, attached } if should_do => {
+                    self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body, attached)?;
                 }
                 AST::Struct { name, members } if should_do => {
                     self.visit_struct(name, members, &mut global_scope)?;

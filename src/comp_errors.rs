@@ -4,7 +4,7 @@ use crate::lexer::{CodePosition, Token, TokenType};
 use colorize_rs::AnsiColor;
 use std::fmt;
 use num_derive::FromPrimitive;
-use crate::parser::{format_virtual_type_sig, ModuleAccessVariant, TypesKind, VirtualDirectiveArgType};
+use crate::parser::{format_virtual_type_sig, Expression, ModuleAccessVariant, TypesKind, VirtualDirectiveArgType};
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -70,6 +70,9 @@ pub enum CodeErrorType {
     CanOnlyFreePointers,
     ConditionsMustBeBools,
     ErrorFromDirective,
+    WrongFirstMethodParam,
+    ReservedName,
+    UnknownMemberFunction,
 }
 
 #[derive(Debug)]
@@ -160,6 +163,39 @@ impl CodeError {
             "Void function as must-use-expression".to_string(),
             Some("But was used here".to_string()),
             "A void-typed function can not be used as an expression".to_string(),
+            vec![],
+        )
+    }
+
+    pub fn wrong_first_method_param(tok: &Token, typ: &TypesKind) -> Self {
+        Self::new(
+            tok.code_position,
+            CodeErrorType::WrongFirstMethodParam,
+            "Wrong first method parameter".to_string(),
+            Some("Concerning this method".to_string()),
+            format!("A method must have its first parameter be a pointer to the struct it implements on, but this one has `{typ}`"),
+            vec![],
+        )
+    }
+
+    pub fn unknown_member_function(parent_cpos: CodePosition, stct_name: &String, child: &Token) -> Self {
+        Self::new(
+            parent_cpos.merge(child.code_position),
+            CodeErrorType::UnknownMemberFunction,
+            "Unknown member function".to_string(),
+            Some("Called here".to_string()),
+            format!("The struct `{stct_name}` has no member function `{child}` in its scope"),
+            vec![],
+        )
+    }
+
+    pub fn reserved_name(tok: &Token) -> Self {
+        Self::new(
+            tok.code_position,
+            CodeErrorType::ReservedName,
+            "Use of a reserve name".to_string(),
+            Some("This name".to_string()),
+            format!("Names starting with `__` (like `{tok}`) are reserved and can thus not be used"),
             vec![],
         )
     }

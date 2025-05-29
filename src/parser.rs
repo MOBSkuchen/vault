@@ -220,9 +220,14 @@ impl<'a> Parser<'a> {
 
         self.consume(pointer, TokenType::LParen, None)?;
 
-        let args = self.parse_arguments(pointer)?;
+        let args = self.parse_parameters(pointer)?;
 
         self.consume(pointer, TokenType::RParen, None)?;
+        
+        let attached = if self.match_token(pointer, TokenType::Identifier)? { 
+            let tok = self.previous(pointer).unwrap();
+            Some(TypesKind::Struct {name: ModuleAccessVariant::Base {name: (&tok.content).to_string(), cpos: tok.code_position}})
+        } else { None };
 
         self.consume(pointer, TokenType::Colon, None)?;
         let ret = self.parse_type(pointer)?;
@@ -234,7 +239,8 @@ impl<'a> Parser<'a> {
             fmode,
             ret,
             params: args,
-            body
+            body,
+            attached
         })
     }
 
@@ -347,12 +353,7 @@ impl<'a> Parser<'a> {
                         self.advance(pointer);
                         Ok(AST::VariableReassign {name: mav, value: self.parse_expression(pointer)?})
                     } else {
-                        let cpos = mav.ensured_compute_codeposition();
-                        self.warning(CodeWarning::new_unnecessary_code(
-                            cpos,
-                            None,
-                        ));
-                        Ok(AST::Expression { expr: Expression { expression: ExpressionKind::ModuleAccess(mav), code_position: cpos } })
+                        Ok(AST::Expression { expr: self.parse_expression(pointer)? } )
                     }
                 }
                 TokenType::NumberInt | TokenType::NumberFloat => {
@@ -451,7 +452,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_arguments(&self, pointer: &mut usize) -> CodeResult<Vec<(&Token, Types)>> {
+    fn parse_parameters(&self, pointer: &mut usize) -> CodeResult<Vec<(&Token, Types)>> {
         let mut arguments = Vec::new();
 
         while let Some(token) = self.peek(pointer) {
@@ -530,7 +531,25 @@ impl<'a> Parser<'a> {
         let cpos = node.code_position;
         if self.match_token(pointer, TokenType::Dot)? {
             let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
-            return Ok(Expression { expression : ExpressionKind::Access {parent: Box::new(node), child, ptr: false}, code_position: cpos.merge(child.code_position)})
+            return if self.match_token(pointer, TokenType::LParen)? {
+                let mut arguments = vec![];
+
+                if !self.check(pointer, TokenType::RParen)? {
+                    loop {
+                        let expr = self.parse_expression(pointer)?;
+                        arguments.push(expr);
+                        if self.match_token(pointer, TokenType::Comma)? {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+
+                self.consume(pointer, TokenType::RParen, Some("Expected `)` after arguments".to_string()))?;
+                Ok(Expression { expression: ExpressionKind::AccessFCall { parent: Box::new(node), child, arguments }, code_position: cpos.merge(child.code_position) })
+            } else {
+                Ok(Expression { expression: ExpressionKind::Access { parent: Box::new(node), child, ptr: false }, code_position: cpos.merge(child.code_position) })
+            }
         } else if self.match_token(pointer, TokenType::Relative)? {
             let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
             return Ok(Expression { expression : ExpressionKind::Access {parent: Box::new(node), child, ptr: true}, code_position: cpos.merge(child.code_position)})
@@ -901,7 +920,6 @@ pub enum ExpressionKind<'a> {
         value: f64,
         token: &'a Token,
     },
-    // Identifier(&'a Token),
     String(&'a Token),
     ModuleAccess(ModuleAccessVariant),
     BinaryOp { lhs: Box<Expression<'a>>, op: (&'a Token, BinaryOp), rhs: Box<Expression<'a>> },
@@ -912,7 +930,8 @@ pub enum ExpressionKind<'a> {
     Malloc { amount: Box<Expression<'a>> },
     Free { var: Box<Expression<'a>> },
     New { name: ModuleAccessVariant, arguments: Vec<Expression<'a>> },
-    Access { parent: Box<Expression<'a>>, child: &'a Token, ptr: bool }
+    Access { parent: Box<Expression<'a>>, child: &'a Token, ptr: bool },
+    AccessFCall { parent: Box<Expression<'a>>, child: &'a Token, arguments: Vec<Expression<'a>> }
 }
 
 impl<'a> ExpressionKind<'a> {
@@ -1002,6 +1021,7 @@ pub enum AST<'a> {
         ret: Types,
         params: Vec<(& 'a Token, Types)>,
         body: Option<Vec<AST<'a>>>,
+        attached: Option<TypesKind>
     },
     VariableDef { name: &'a Token, value: Option<Expression<'a>>, typ: Option<Types> },
     VariableReassign { name: ModuleAccessVariant, value: Expression<'a> },
