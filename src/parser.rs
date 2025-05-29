@@ -189,7 +189,7 @@ impl<'a> Parser<'a> {
 
         // Case 2: import "path" => <module>
         if self.match_token(pointer, TokenType::String)? {
-            let path = Some(self.consume(pointer, TokenType::String, None)?);
+            let path = Some(self.previous(pointer).unwrap());
             self.consume(pointer, TokenType::As, Some("expected '=>' after path".to_string()))?;
             let module = self.consume(pointer, TokenType::Identifier, None)?;
             return Ok(AST::Import { module, path, name: None });
