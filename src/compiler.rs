@@ -457,18 +457,25 @@ impl<'ctx> Compiler<'ctx> {
                         match &new_type.kind {
                             TypesKind::F32 | TypesKind::F64 => {
                                 let dest_type = real_new_typ.into_float_type();
-                                if float_val.get_type().size_of().get_sign_extended_constant().unwrap() < dest_type.size_of().get_sign_extended_constant().unwrap() {
-                                    self.builder
-                                        .build_float_ext(float_val, dest_type, "")
-                                        .map(|v| v.as_basic_value_enum())
-                                        .ok()
-                                } else if float_val.get_type().size_of().get_sign_extended_constant().unwrap() > dest_type.size_of().get_sign_extended_constant().unwrap() {
-                                    self.builder
-                                        .build_float_trunc(float_val, dest_type, "")
-                                        .map(|v| v.as_basic_value_enum())
-                                        .ok()
-                                } else {
-                                    return Ok((Box::new(value), old_type));
+                                let src_size = float_val.get_type().size_of().get_sign_extended_constant();
+                                let dest_size = dest_type.size_of().get_sign_extended_constant();
+
+                                match (src_size, dest_size) {
+                                    (Some(src), Some(dest)) if src < dest => {
+                                        self.builder
+                                            .build_float_ext(float_val, dest_type, "")
+                                            .map(|v| v.as_basic_value_enum())
+                                            .ok()
+                                    }
+                                    (Some(src), Some(dest)) if src > dest => {
+                                        self.builder
+                                            .build_float_trunc(float_val, dest_type, "")
+                                            .map(|v| v.as_basic_value_enum())
+                                            .ok()
+                                    }
+                                    _ => {
+                                        return Ok((Box::new(value), old_type));
+                                    }
                                 }
                             }
                             TypesKind::I32 | TypesKind::I64 | TypesKind::U32 | TypesKind::U64 | TypesKind::U8 => {
@@ -858,14 +865,14 @@ impl<'ctx> Compiler<'ctx> {
                     expr,
                     None,
                     true)?;
-                
+
                 let (assign_val, assign_typ) = self.visit_expr(
                     function,
                     global_scope,
                     value,
                     Some(&TypesKind::Ptr(Box::new(val_typ.clone()))),
                     true)?;
-                
+
                 match &val_typ {
                     TypesKind::Pointer => {}
                     TypesKind::Ptr(underlying) => {
@@ -875,7 +882,7 @@ impl<'ctx> Compiler<'ctx> {
                         return Err(CodeError::struct_reassignment(&cpos, &val_typ, &assign_typ));
                     }
                 }
-                
+
                 self.builder.build_store(val_ptr.as_basic_value_enum().into_pointer_value(), assign_val.as_basic_value_enum()).expect("Failed to restore");
             }
             AST::Continue(tok) => if let Some(current) = cur_block {
@@ -1016,7 +1023,7 @@ impl<'ctx> Compiler<'ctx> {
                     let path = if let Some(p) = path {
                         p.content.clone()
                     } else {format!("{m}.sl")};
-                    
+
                     let new_file_manager = FileManager::new_from(path)?;
 
                     let tokens = tokenize(new_file_manager.get_content())?;
@@ -1033,17 +1040,15 @@ impl<'ctx> Compiler<'ctx> {
                     }
 
                     let new_module = self.context.create_module(&m.content);
-                    let (md, scope) = self.comp_ast(new_module, ast, compilation_config, &new_file_manager).expect("FAILED");
+                    let (md, scope) = self.comp_ast(new_module, ast, compilation_config, &new_file_manager)?;
                     
-                    // Copy over DECLARED, but not defined functions. These do NOT get linked in.
+                    // Copy over functions. Unused function which are unused in the module do NOT get linked in.
                     let mut copied_functions = HashMap::new();
                     for func in &scope.functions {
-                        if !func.1.1 {
-                            let fval = md.get_function(func.0).unwrap();
-                            let fval = module.add_function(func.0, fval.get_type(), Some(fval.get_linkage()));
-                            // Use newly created function value, because the other one is freed
-                            copied_functions.insert(func.0.clone(), (fval, func.1.1, func.1.2.clone()));
-                        }
+                        let fval = md.get_function(func.0).unwrap();
+                        let fval = module.add_function(func.0, fval.get_type(), Some(fval.get_linkage()));
+                        // Use newly created function value, because the other one is freed
+                        copied_functions.insert(func.0.clone(), (fval, func.1.1, func.1.2.clone()));
                     }
                     
                     // Link with other, which copies all the stuff (except declarations)
