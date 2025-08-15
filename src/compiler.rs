@@ -11,7 +11,7 @@ use inkwell::values::{BasicValue, FloatValue, FunctionValue, InstructionOpcode, 
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::{MixedResult};
-use crate::directives::{visit_directive, CompilationConfig};
+use crate::directives::{visit_directive, CompilationConfig, FnSignals};
 use crate::filemanager::FileManager;
 use crate::lexer::{tokenize, CodePosition, Token};
 use crate::parser::{BinaryOp, Expression, ExpressionKind, FunctionMode, ModuleAccessVariant, Parser, Types, TypesKind, AST};
@@ -50,11 +50,12 @@ pub struct Function<'ctx> {
     ret: TypesKind,
     function_scope: Namespace<'ctx>,
     name: String,
+    modifiers: Vec<FnSignals>
 }
 
 impl<'ctx> Function<'ctx> {
-    pub fn new(compiler: &'ctx Compiler<'ctx>, function_value: FunctionValue<'ctx>, ret: TypesKind, name: String) -> Self {
-        Self { compiler, function_value, ret, function_scope: Namespace::new(), name }
+    pub fn new(compiler: &'ctx Compiler<'ctx>, function_value: FunctionValue<'ctx>, ret: TypesKind, name: String, modifiers: Vec<FnSignals>) -> Self {
+        Self { compiler, function_value, ret, function_scope: Namespace::new(), name, modifiers }
     }
 
     pub fn new_block(&self, block_name: &str, pae: bool) -> BasicBlock<'ctx> {
@@ -901,7 +902,7 @@ impl<'ctx> Compiler<'ctx> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn visit_function_def<'a>(&'a self, module: &Module<'a>, name: &Token, fmode: FunctionMode, 
                                          return_type: Types, params: Vec<(&Token, Types)>, global_scope: &mut Namespace<'a>,
-                                         body: Option<Vec<AST>>, attached: Option<TypesKind>) -> CodeResult<()>
+                                         body: Option<Vec<AST>>, attached: Option<TypesKind>, modifiers: Vec<FnSignals>) -> CodeResult<()>
     {
         let fn_type = self.convert_type_function(&return_type.kind, params.iter().map(|x| {x.1.kind.clone()}).collect(), global_scope, name.code_position)?;
         if let Some((_, already_defined, _)) = global_scope.functions.get(&name.content) { 
@@ -921,7 +922,7 @@ impl<'ctx> Compiler<'ctx> {
             }
         } else {
             let n = name.content.clone();
-            if n.starts_with("__") {
+            if n.starts_with("__") && !modifiers.contains(&FnSignals::IgnoreReservedName) {
                 return Err(CodeError::reserved_name(name))
             } else {
                 n
@@ -931,7 +932,7 @@ impl<'ctx> Compiler<'ctx> {
         let typ = TypesKind::Function {ret: Box::new(return_type.kind.clone()), params: params.iter().map(|x1| {x1.1.kind.clone()}).collect()};
         
         let function_value = module.add_function(&fname, fn_type, Some(fmode.into()));
-        let mut function = Function::new(self, function_value, return_type.kind.clone(), fname.clone());
+        let mut function = Function::new(self, function_value, return_type.kind.clone(), fname.clone(), modifiers);
 
         global_scope.functions.insert(fname, (function_value, body.is_some(), typ));
    
@@ -991,17 +992,20 @@ impl<'ctx> Compiler<'ctx> {
         print_code_warn(code_warning, self.file_manager);
     }
 
-    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> MixedResult<(Module<'a>, Namespace)> {
+    pub fn comp_ast<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> MixedResult<(Module<'a>, Namespace, Vec<FnSignals>)> {
         let mut global_scope = Namespace::new();
         let mut should_do = true;
-        
+        let mut modifiers = Vec::new();
+
         for branch in ast {
             match branch {
                 AST::FunctionDef { ret, fmode, name, params, body, attached } if should_do => {
-                    self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body, attached)?;
+                    self.visit_function_def(&module, name, fmode, ret, params, &mut global_scope, body, attached, std::mem::take(&mut modifiers))?;
+                    modifiers.clear();
                 }
                 AST::Struct { name, members } if should_do => {
                     self.visit_struct(name, members, &mut global_scope)?;
+                    modifiers.clear();
                 }
                 AST::Import { module: m, path, name } if should_do => {
                     let path = if let Some(p) = path {
@@ -1024,7 +1028,8 @@ impl<'ctx> Compiler<'ctx> {
                     }
 
                     let new_module = self.context.create_module(&m.content);
-                    let (md, scope) = self.comp_ast(new_module, ast, compilation_config, &new_file_manager)?;
+                    // TODO: Maybe make FnSignals for imports too?
+                    let (md, scope, _) = self.comp_ast(new_module, ast, compilation_config, &new_file_manager)?;
                     
                     // Copy over functions. Unused function which are unused in the module do NOT get linked in.
                     let mut copied_functions = HashMap::new();
@@ -1064,20 +1069,23 @@ impl<'ctx> Compiler<'ctx> {
                     
                     let name = name.map(|t1| t1.content.clone()).or_else(|| {Some(m.content.clone())});
                     global_scope.modules.insert(name.unwrap(), new_scope);
+                    modifiers.clear();
                 }
                 // TODO: Add an optional body to directives
                 AST::Directive(directive) => {
-                    should_do = visit_directive(directive, compilation_config, file_manager)?;
+                    let mut directive = visit_directive(directive, compilation_config, file_manager)?;
+                    modifiers.append(&mut directive.modifiers);
+                    should_do = directive.enable;
                 }
                 _ if should_do => unreachable!(),
                 _ => {should_do = true}
             }
         }
-        Ok((module, global_scope))
+        Ok((module, global_scope, modifiers))
     }
 
     pub fn compile<'a>(&'a self, module: Module<'a>, ast: Vec<AST>, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> MixedResult<Module<'a>> {
-        let (md, _) = self.comp_ast(module, ast, compilation_config, file_manager)?;
+        let (md, _, _) = self.comp_ast(module, ast, compilation_config, file_manager)?;
         Ok(md)
     }
 }

@@ -3,6 +3,7 @@ use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::DevDebugLevel;
 use crate::filemanager::FileManager;
 use crate::parser::{Directive, DirectiveArgType, DirectiveExpr, VirtualDirectiveArgType};
+use crate::utils::dedup;
 
 pub struct CompilationConfig {
     debug: bool,
@@ -126,7 +127,34 @@ macro_rules! virtual_directive_args {
     };
 }
 
-pub fn visit_directive(directive: Directive, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<bool> {
+#[derive(Hash, Eq, PartialEq, Copy, Clone)]
+pub enum FnSignals {
+    Final,
+    IgnoreReservedName
+}
+
+pub struct FunctionModifier {
+    pub enable: bool,
+    pub modifiers: Vec<FnSignals>
+}
+
+impl FunctionModifier {
+    pub fn new(enable: bool) -> Self {
+        Self { enable, modifiers: Vec::new()}
+    }
+
+    pub fn passthrough(m: FnSignals) -> Self {
+        Self { enable: true, modifiers: vec![m]}
+    }
+
+    pub fn merge(&mut self, enable: bool, other: &mut FunctionModifier) {
+        self.enable = enable;
+        self.modifiers.append(&mut other.modifiers);
+        dedup(&mut self.modifiers)
+    }
+}
+
+pub fn visit_directive(directive: Directive, compilation_config: &mut CompilationConfig, file_manager: &FileManager) -> CodeResult<FunctionModifier> {
     let d = directive.name.content.to_uppercase();
     match d.as_str() {
         "AND" => {
@@ -135,9 +163,10 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ left: Directive, right: Directive ],
                 values = directive.arguments,
             }
-            let left = visit_directive(*left.clone(), compilation_config, file_manager)?;
-            let right = visit_directive(*right.clone(), compilation_config, file_manager)?;
-            Ok(left && right)
+            let mut left = visit_directive(*left.clone(), compilation_config, file_manager)?;
+            let mut right = visit_directive(*right.clone(), compilation_config, file_manager)?;
+            left.merge(left.enable && right.enable, &mut right);
+            Ok(left)
         }
         "OR" => {
             virtual_directive_args! {
@@ -145,9 +174,10 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ left: Directive, right: Directive ],
                 values = directive.arguments,
             }
-            let left = visit_directive(*left.clone(), compilation_config, file_manager)?;
-            let right = visit_directive(*right.clone(), compilation_config, file_manager)?;
-            Ok(left || right)
+            let mut left = visit_directive(*left.clone(), compilation_config, file_manager)?;
+            let mut right = visit_directive(*right.clone(), compilation_config, file_manager)?;
+            left.merge(left.enable || right.enable, &mut right);
+            Ok(left)
         }
         "XOR" => {
             virtual_directive_args! {
@@ -155,9 +185,10 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ left: Directive, right: Directive ],
                 values = directive.arguments,
             }
-            let left = visit_directive(*left.clone(), compilation_config, file_manager)?;
-            let right = visit_directive(*right.clone(), compilation_config, file_manager)?;
-            Ok(left ^ right)
+            let mut left = visit_directive(*left.clone(), compilation_config, file_manager)?;
+            let mut right = visit_directive(*right.clone(), compilation_config, file_manager)?;
+            left.merge(left.enable ^ right.enable, &mut right);
+            Ok(left)
         }
         "ALWAYS" => {
             virtual_directive_args! {
@@ -165,7 +196,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ ],
                 values = directive.arguments,
             }
-            Ok(true)
+            Ok(FunctionModifier::new(true))
         }
         "NEVER" => {
             virtual_directive_args! {
@@ -173,7 +204,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ ],
                 values = directive.arguments,
             }
-            Ok(false)
+            Ok(FunctionModifier::new(true))
         }
         "NOT" => {
             virtual_directive_args! {
@@ -181,8 +212,9 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ expr: Directive ],
                 values = directive.arguments,
             }
-            let left = visit_directive(*expr.clone(), compilation_config, file_manager)?;
-            Ok(!left)
+            let mut left = visit_directive(*expr.clone(), compilation_config, file_manager)?;
+            left.enable = !left.enable;
+            Ok(left)
         }
         "OS" => {
             virtual_directive_args! {
@@ -190,7 +222,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ os: String ],
                 values = directive.arguments,
             }
-            Ok(std::env::consts::OS == os)
+            Ok(FunctionModifier::new(std::env::consts::OS == os))
         }
         "ARCH" => {
             virtual_directive_args! {
@@ -198,7 +230,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ arch: String ],
                 values = directive.arguments,
             }
-            Ok(std::env::consts::ARCH == arch)
+            Ok(FunctionModifier::new(std::env::consts::ARCH == arch))
         }
         "DEBUG" => {
             virtual_directive_args! {
@@ -206,7 +238,23 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [],
                 values = directive.arguments,
             }
-            Ok(compilation_config.debug)
+            Ok(FunctionModifier::new(compilation_config.debug))
+        }
+        "IGNORE_RESERVED" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [],
+                values = directive.arguments,
+            }
+            Ok(FunctionModifier::passthrough(FnSignals::IgnoreReservedName))
+        }
+        "FINAL" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [],
+                values = directive.arguments,
+            }
+            Ok(FunctionModifier::passthrough(FnSignals::Final))
         }
         "LINK" => {
             virtual_directive_args! {
@@ -215,7 +263,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 values = directive.arguments,
             }
             compilation_config.libs.push(lib.clone());
-            Ok(true)
+            Ok(FunctionModifier::new(true))
         }
         // IF && IF IMMUTABLE
         "IF" | "IFI" => {
@@ -224,8 +272,9 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ cond: Directive, exe: Directive,  ],
                 values = directive.arguments,
             }
-            let ret = if visit_directive(*cond.clone(), compilation_config, file_manager)? { visit_directive(*exe.clone(), compilation_config, file_manager)? } else { false };
-            Ok(if d.ends_with("I") { true } else { ret })
+            let fmod = visit_directive(*cond.clone(), compilation_config, file_manager)?;
+            let ret = if fmod.enable { visit_directive(*exe.clone(), compilation_config, file_manager)? } else { return Ok(fmod) };
+            Ok(if d.ends_with("I") { fmod } else { ret })
         }
         // IF ELSE && IF ELSE IMMUTABLE
         "IFE" | "IFEI" => {
@@ -234,8 +283,9 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 args = [ cond: Directive, exe: Directive, otherwise: Directive ],
                 values = directive.arguments,
             }
-            let ret = if visit_directive(*cond.clone(), compilation_config, file_manager)? { visit_directive(*exe.clone(), compilation_config, file_manager)? } else { visit_directive(*otherwise.clone(), compilation_config, file_manager)? };
-            Ok(if d.ends_with("I") { true } else { ret })
+            let fmod = visit_directive(*cond.clone(), compilation_config, file_manager)?;
+            let ret = if fmod.enable { visit_directive(*exe.clone(), compilation_config, file_manager)? } else { visit_directive(*otherwise.clone(), compilation_config, file_manager)? };
+            Ok(if d.ends_with("I") { fmod } else { ret })
         }
         "ERR" => {
             virtual_directive_args! {
@@ -262,7 +312,7 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
             }
             let warning = CodeWarning::directive_warning(directive.code_position, msg.to_owned());
             print_code_warn(warning, file_manager);
-            Ok(!d.ends_with("F"))
+            Ok(FunctionModifier::new(!d.ends_with("F")))
         }
         _ => Err(CodeError::unknown_directive(directive.name)) 
     }
