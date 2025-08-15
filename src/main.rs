@@ -56,6 +56,10 @@ impl Display for OptLevel {
     }
 }
 
+fn display_target_triple(target_triple: &TargetTriple) -> String {
+    target_triple.as_str().to_str().unwrap().to_string()
+}
+
 enum CompOutputType {
     Object,
     Asm,
@@ -198,7 +202,7 @@ struct LinkJobData {
 impl Display for CompileJobData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Module `{}` for `{}` to output file: `{}` (type: {}) with optimization {}", 
-               self.module_id, self.target_triple, 
+               self.module_id, display_target_triple(&self.target_triple),
                self.output, self.output_type, 
                self.optimization)
     }
@@ -289,6 +293,12 @@ fn compile(filepath: String, compile_job_data: CompileJobData) {
         }
         
         println!("\nAn error has occurred during compilation, terminating compilation.")
+    } else {
+        let mut comp_config = x.unwrap();
+        dedup(&mut comp_config.libs);
+        if !comp_config.libs.is_empty() {
+            println!("Please note: program wants to link with {} libraries: {}", comp_config.libs.len(), comp_config.libs.join(", "));
+        }
     }
     
     // TODO: Handle compilation config result
