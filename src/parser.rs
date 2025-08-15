@@ -133,7 +133,7 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.peek(pointer) {
             match token.token_type {
-                TokenType::Define => {
+                TokenType::Function => {
                     self.advance(pointer);
                     let func = self.parse_function(pointer)?;
                     statements.push(func);

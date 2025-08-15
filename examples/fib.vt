@@ -2,7 +2,7 @@
 
 import "vault-stdlib/stdlib.vt" => stdlib
 
-def fib(n: i64): i64 {
+fun fib(n: i64): i64 {
     if n <= 1 {
         return n
     } else {
@@ -10,7 +10,7 @@ def fib(n: i64): i64 {
     }
 }
 
-def export main(): void {
+fun export main(): void {
     stdlib::print("Fibonacci number: ");
     let result = |> 256;
     stdlib::ptr_input(result, 256);

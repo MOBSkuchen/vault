@@ -27,7 +27,7 @@ First program: *Print "Hello World"*
 ````
 import stdlib
 
-def export main(): void {
+fun export main(): void {
     stdlib::print("Hello World")
 }
 ````
@@ -59,7 +59,7 @@ age = 23;
 name = "Chuck";
 ```
 
-### Functions def / dec
+### Functions fun / dec
 Function definitions and declarations are similar to Python and C.
 
 Function modes:
@@ -71,12 +71,12 @@ Function modes:
 Note : The *main* function is not mandatory and can return anything, e.g. **unchecked**
 ```
 // Return type i32
-def export main(): i32 {
+fun export main(): i32 {
     return 0
 }
 
 // Extern void function with param 'num' i32
-def extern print_whatever(num: i32): void;
+fun extern print_whatever(num: i32): void;
 ```
 
 ### Function calling
@@ -106,7 +106,7 @@ stdlib::ptr_input(result, 256);
 Use `|> (amount)` for malloc and `|< (expr)` for free
 
 ### Structs
-Struct definitions are a like the ones in rust, but simpler.
+Struct definitions are like the ones in rust, but simpler.
 
 ```
 struct Point {
@@ -146,7 +146,7 @@ To reassign a property, you must have a pointer to the property (like shown befo
 #### Member functions on structs
 Declaring member functions for structs is also possible:
 ```
-def draw_point(p: Point*) Point : void {
+fun draw_point(p: Point*) Point : void {
     ...
 }
 ```
@@ -222,7 +222,7 @@ Directives are compile time instructions. They may enable you to link something 
 ```
 // Windows only function
 #(OS "windows")
-def func();
+fun func();
 ```
 Directives are declared with `#`. They follow the layout `( NAME <...> )`. They always return a boolean.
 Putting them over a statement will disable / enable it depending on the return value of the directive.

@@ -6,11 +6,10 @@ use std::ops::Range;
 #[derive(PartialEq, Copy, Debug, Clone, Hash)]
 pub enum TokenType {
     // Keywords
-    Define,
+    Function,
     Export,
     Import,
     Extern,
-    Mut,
 
     Identifier,
     String,
@@ -79,11 +78,10 @@ pub enum TokenType {
 impl TokenType {
     pub fn visualize(&self) -> String {
         (match self {
-            TokenType::Define => "def",
+            TokenType::Function => "fun",
             TokenType::Export => "export",
             TokenType::Import => "import",
             TokenType::Extern => "extern",
-            TokenType::Mut => "mut",
             TokenType::Identifier => "Identifier",
             TokenType::String => "String",
             TokenType::NumberInt => "Integer",
@@ -516,11 +514,10 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     .iter()
                     .collect();
                 let token_type = match identifier.as_str() {
-                    "def" => TokenType::Define,
+                    "fun" => TokenType::Function,
                     "export" => TokenType::Export,
                     "import" => TokenType::Import,
                     "extern" => TokenType::Extern,
-                    "mut" => TokenType::Mut,
                     "let" => TokenType::Let,
                     "private" => TokenType::Private,
                     "return" => TokenType::Return,
