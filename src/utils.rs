@@ -1,17 +1,12 @@
 use std::collections::HashSet;
 use std::hash::Hash;
-use inkwell::context::Context;
-use inkwell::llvm_sys::prelude::LLVMModuleRef;
-use inkwell::memory_buffer::MemoryBuffer;
-use inkwell::module::Module;
 
-#[allow(clippy::needless_range_loop)]
 pub fn dedup<T: Hash + Eq>(v: &mut Vec<T>) {
     let mut set = HashSet::new();
     let mut indices = Vec::new();
 
-    for i in 0..v.len() {
-        if !set.insert(&v[i]){
+    for (i, item) in v.iter().enumerate() {
+        if !set.insert(item){
             indices.push(i);
         }
     }
