@@ -22,7 +22,7 @@ fn resolve_path<P: AsRef<Path>>(input_path: P) -> io::Result<PathBuf> {
 #[derive(Debug)]
 pub struct FileManager {
     pub input_file: String,
-    pub _file_path: PathBuf,
+    pub file_path: PathBuf,
     content: String,
 }
 
@@ -40,7 +40,7 @@ impl FileManager {
             } else {
                 Ok(Self {
                     input_file,
-                    _file_path: file_path,
+                    file_path: file_path,
                     content: content.unwrap(),
                 })
             }
@@ -49,10 +49,10 @@ impl FileManager {
 
     pub fn new_from(file: String) -> CompResult<Self> {
         let x = resolve_path(&file);
-        if x.is_err() {
-            Err(CompilerError::FileNotAccessible(file, true))
+        if let Ok(m) = x {
+            Self::new(m, file)
         } else {
-            Self::new(x.unwrap(), file)
+            Err(CompilerError::FileNotAccessible(file, true))
         }
     }
 

@@ -2,6 +2,7 @@ use std::env::temp_dir;
 use std::fmt::{Display, Formatter};
 use clap::{Arg, ValueHint};
 use clap_builder::Command;
+use colorize_rs::AnsiColor;
 use inkwell::context::Context;
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lld_rx::LldFlavor;
@@ -226,11 +227,11 @@ impl From<CompilerError> for MixedError {
     }
 }
 
-pub type MixedResult<T> = Result<T, MixedError>;
+type MixedResult<T> = Result<T, MixedError>;
 
 fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> MixedResult<CompilationConfig> {
     let tokens = tokenize(file_manager.get_content())?;
-    println!("Compiling `{}` with profile:\n{compile_job_data}", file_manager.input_file);
+    println!("{} `{}` with profile:\n{compile_job_data}", "Compiling".b_yellow(), file_manager.file_path.file_name().unwrap().to_str().unwrap());
     
     if compile_job_data.dev_debug_level as u32 >= 2 { 
         println!("Parsed Tokens:\n{:#?}", tokens);
@@ -272,7 +273,7 @@ fn compile_job(file_manager: &FileManager, compile_job_data: CompileJobData) -> 
         CompOutputType::IR => codegen.gen_ir(&module, compile_job_data.output),
         CompOutputType::BC => codegen.gen_bc(&module, compile_job_data.output)
     };
-    println!("Finished writing to `{file}`!");
+    println!("{} writing to `{file}`!", "Finished".b_green());
     Ok(compilation_config)
 }
 
@@ -333,7 +334,7 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
             MixedError::CompilerError(comp_err) => comp_err.output(),
             MixedError::CodeError(code_err) => code_err.visualize_error(&file_manager),
         }
-        println!("\nAn error has occurred during compilation, terminating compilation.");
+        println!("{}", "\nAn error has occurred during compilation, terminating compilation.".red());
         return
     }
     
@@ -352,7 +353,8 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     // Remove duplicates from libs
     dedup(&mut libs);
 
-    println!("Linking `{tmp_file}` with {} libs: {}", libs.len(), libs.iter().map(|x1| {format!("`{x1}`")}).collect::<Vec<String>>().join(", "));
+    let libs_s = libs.iter().map(|x1| {format!("`{x1}`")}).collect::<Vec<String>>().join(", ");
+    println!("{} `{tmp_file}` with {} libs: {}", "Linking".b_blue(), libs.len().to_string().bold(), libs_s.grey());
 
     let linker_result = lld_link(link_job_data.output_type.into(),
              vec![tmp_file], &link_job_data.output, link_job_data.lib, libs,
@@ -360,10 +362,10 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     
     match linker_result {
         Ok(_) => {
-            println!("Finished writing to `{}`", link_job_data.output);
+            println!("{} writing to `{}`", "Finished".b_green(), link_job_data.output.bold());
         }
         Err(msg) => {
-            print!("Failed to link, terminating building. Reason:\n{msg}");
+            print!("{}, terminating building. Reason:\n{}", "Failed to link".red(), msg);
         }
     }
 }

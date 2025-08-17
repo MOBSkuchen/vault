@@ -296,18 +296,13 @@ impl Scanner {
     }
 
     pub fn this_as_token(&self, token_type: TokenType) -> Option<Token> {
-        let c = self.previous();
-        if c.is_none() {
-            None
-        } else {
-            Some(Token::from_one(
+        self.previous().map(|c| Token::from_one(
                 self.cursor,
                 self.line,
                 self.line_idx,
-                *c.unwrap(),
+                *c,
                 token_type,
             ))
-        }
     }
 
     pub fn this_as_codepos(&self) -> Option<CodePosition> {
