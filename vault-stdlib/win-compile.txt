@@ -1,0 +1,4 @@
+# Compiling the VAULT stdlib on windows
+cl /c vault-stdlib-win.c
+lib vault-stdlib-win.obj /out:vault-stdlib-win.lib
+del vault-stdlib-win.obj

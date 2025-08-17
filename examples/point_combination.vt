@@ -1,0 +1,47 @@
+// Calculate the distance between two points
+
+import "vault-stdlib/stdlib.vt" => stdlib
+
+fun get_int(): i32 {
+    let result = |> 256;
+    stdlib::ptr_input(result, 256);
+    let num = 0;
+    let erc = stdlib::str_to_int(result, &num);
+    if erc != 0 {
+        stdlib::print("Int prompt failed!");
+        return;
+    };
+    return num
+}
+
+struct Point {
+    x: i32,
+    y: i32
+}
+
+fun self_combine(self: Point*, other: Point*) Point : void {
+    self~x = self.x + other.x;
+    self~y = self.y + other.y;
+}
+
+fun main(): void {
+    stdlib::print("Point 1 X: ");
+    let p_1_x = get_int();
+    stdlib::print("Point 1 Y: ");
+    let p_1_y = get_int();
+    let p_1 = new Point(p_1_x, p_1_y);
+
+    stdlib::print("Point 2 X: ");
+    let p_2_x = get_int();
+    stdlib::print("Point 2 Y: ");
+    let p_2_y = get_int();
+    let p_2 = new Point(p_2_x, p_2_y);
+
+    p_1.self_combine(&p_2);
+
+    stdlib::print("Combined X: ");
+    stdlib::print_int(p_1.x);
+    stdlib::println("");
+    stdlib::print("Combined Y: ");
+    stdlib::print_int(p_1.y);
+}

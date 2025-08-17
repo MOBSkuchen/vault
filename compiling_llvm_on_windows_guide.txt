@@ -1,0 +1,8 @@
+# Open Visual Studio 2022 (or similar) Command Prompt for x64!!
+# Note: This project does not (yet) utilize mlir and lldb
+# https://github.com/halide/Halide/blob/main/README.md
+
+git clone --depth 1 --branch release/18.x https://github.com/llvm/llvm-project.git
+cmake -G "Visual Studio 17 2022" -S llvm-project/llvm -B build -D CMAKE_BUILD_TYPE=Release -D LLVM_ENABLE_PROJECTS="clang;lld;clang-tools-extra;lldb;mlir" -D LLVM_TARGETS_TO_BUILD="WebAssembly;X86;AArch64;ARM;Hexagon;NVPTX;PowerPC;RISCV" -D LLVM_BUILD_32_BITS=OFF
+cmake --build build --config Release        # For multi build system (like Visual Studio), it is necessary to specify the build type: https://stackoverflow.com/questions/7724569/debug-vs-release-in-cmakehttps://stackoverflow.com/questions/7724569/debug-vs-release-in-cmake
+cmake --install build --prefix llvm-install
