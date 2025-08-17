@@ -302,8 +302,12 @@ impl<'ctx> Compiler<'ctx> {
         Ok(match expr.expression {
             ExpressionKind::ModuleAccess(mav) => {
                 let def = self.resolve_mav(&mav, Some(&function.function_scope), global_scope)?;
-                let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
-                (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
+                if matches!(def.0, TypesKind::Struct { name: _ }) {
+                    (Box::new(def.1), TypesKind::Ptr(Box::new(def.0.clone())))
+                } else {
+                    let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
+                    (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
+                }
             }
             ExpressionKind::IntNumber { value, .. } => {
                 let (hint, vt) = hinted_int(type_hint, self.context);
@@ -354,13 +358,13 @@ impl<'ctx> Compiler<'ctx> {
             }
             ExpressionKind::AccessFCall { parent, child, arguments } => {
                 let parent_cpos = parent.code_position;
-                let (struct_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
+                let (mut struct_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
                 let inner_struct_type;
                 let (_, stct_name) = match &parent_type {
                     TypesKind::Ptr(ptr) => {
                         match ptr.deref() {
                             TypesKind::Struct { name: mav } => {
-                                inner_struct_type = ptr;
+                                inner_struct_type = ptr.deref();
                                 let holder_scope = self.get_holder_scope(mav, Some(&function.function_scope), global_scope)?;
                                 (holder_scope.struct_order.get(&mav.last_name().unwrap()).unwrap(), mav)
                             }
@@ -579,13 +583,13 @@ impl<'ctx> Compiler<'ctx> {
             }
             ExpressionKind::Access { parent, child, ptr } => {
                 let parent_cpos = parent.code_position;
-                let (parent_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
+                let (mut parent_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
                 let inner_struct_type;
                 let (stct, stct_name) = match &parent_type {
                     TypesKind::Ptr(ptr) => {
                         match ptr.deref() {
                             TypesKind::Struct { name: mav } => {
-                                inner_struct_type = ptr;
+                                inner_struct_type = ptr.deref();
                                 let holder_scope = self.get_holder_scope(mav, Some(&function.function_scope), global_scope)?;
                                 (holder_scope.struct_order.get(&mav.last_name().unwrap()).unwrap(), mav)
                             }

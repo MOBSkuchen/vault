@@ -214,8 +214,7 @@ impl CodePosition {
     }
 }
 
-#[derive(Debug, Hash)]
-#[derive(PartialEq)]
+#[derive(Debug, Hash, PartialEq)]
 pub struct Token {
     pub content: String,
     pub token_type: TokenType,
