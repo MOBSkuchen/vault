@@ -384,7 +384,6 @@ impl<'ctx> Compiler<'ctx> {
                                 return Err(CodeError::argument_count(stct_name.ensured_compute_codeposition(), arguments.len(), params.len()))
                             }
                             for (count, arg) in arguments.into_iter().enumerate() {
-                                if count == 0 { continue }  // Skip `self`
                                 let cpos = arg.code_position;
                                 let (value, typ) = self.visit_expr(function, global_scope, arg, Some(&params[count]), true)?;
                                 if typ != params[count] {
