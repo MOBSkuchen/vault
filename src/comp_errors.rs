@@ -76,6 +76,7 @@ pub enum CodeErrorType {
     ReassignmentTypeMismatch,
     ArrayIndexNotOnArray,
     InvalidTypedExpression,
+    UseOfDeadValue,
 }
 
 #[derive(Debug)]
@@ -87,6 +88,22 @@ pub enum CodeWarningType {
 }
 
 #[derive(Debug)]
+pub struct CodeErrorExt {
+    pub position: CodePosition,
+    pub pointer: String,
+}
+
+impl CodeErrorExt {
+    pub fn new(position: CodePosition,
+               pointer: String) -> Self {
+        Self {
+            position,
+            pointer
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct CodeError {
     pub position: CodePosition,
     pub code_error_type: CodeErrorType,
@@ -94,6 +111,7 @@ pub struct CodeError {
     pub footer: String,
     pub pointer: Option<String>,
     pub notes: Vec<String>,
+    pub exts: Vec<CodeErrorExt>
 }
 
 impl CodeError {
@@ -112,6 +130,27 @@ impl CodeError {
             footer,
             pointer,
             notes,
+            exts: Vec::new()
+        }
+    }
+
+    pub fn new_ext(
+        position: CodePosition,
+        code_error_type: CodeErrorType,
+        title: String,
+        pointer: Option<String>,
+        footer: String,
+        notes: Vec<String>,
+        exts: Vec<CodeErrorExt>
+    ) -> Self {
+        Self {
+            position,
+            code_error_type,
+            title,
+            footer,
+            pointer,
+            notes,
+            exts
         }
     }
 
@@ -156,6 +195,21 @@ impl CodeError {
             Some("But was used here".to_string()),
             "Use a different type, but not void".to_string(),
             vec![],
+        )
+    }
+
+    pub fn dead_value_used(cpos: CodePosition, del_cpos: CodePosition) -> Self {
+        Self::new_ext(
+            cpos,
+            CodeErrorType::UseOfDeadValue,
+            "Use of dead value".to_string(),
+            Some("Contains a dead value".to_string()),
+            "This value was deleted (freed) and is inaccessible".to_string(),
+            vec!["Use the directive `ALLOW_DEAD_VALUE` if this was intentional".to_string()],
+            vec![
+                CodeErrorExt::new(del_cpos,
+                                  "Deletion occurred here".to_string())
+            ]
         )
     }
 

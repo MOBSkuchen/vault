@@ -409,9 +409,16 @@ impl<'a> Parser<'a> {
                 TokenType::Continue => {
                     Ok(AST::Continue(self.consume(pointer, TokenType::Continue, None)?))
                 }
+                TokenType::Del => {
+                    let cpos = self.tokens[*pointer].code_position;
+                    self.consume(pointer, TokenType::Del, None)?;
+                    let expr = self.parse_expression(pointer)?;
+                    let cpos = cpos.merge(expr.code_position);
+                    Ok(AST::Free {cpos, val: Box::new(expr)})
+                }
                 TokenType::If => self.parse_if_case(pointer),
                 TokenType::Return => self.parse_return(pointer),
-                TokenType::LParen | TokenType::Free | TokenType::Malloc | TokenType::Star | TokenType::Ref => Ok(AST::Expression {expr: self.parse_expression(pointer)? }),
+                TokenType::LParen | TokenType::Malloc | TokenType::Star | TokenType::Ref | TokenType::LBrackets => Ok(AST::Expression {expr: self.parse_expression(pointer)? }),
                 _o => Err(CodeError::new_unexpected_token_error(
                     token,
                     TokenType::Statement,
@@ -655,11 +662,6 @@ impl<'a> Parser<'a> {
                 TokenType::Malloc => {
                     Ok(Expression {expression: ExpressionKind::Malloc {
                         amount: Box::new(self.parse_expression(pointer)?) }
-                        , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
-                }
-                TokenType::Free => {
-                    Ok(Expression {expression: ExpressionKind::Free {
-                        var: Box::new(self.parse_expression(pointer)?) }
                         , code_position: token.code_position.merge(self.tokens[*pointer].code_position) })
                 }
                 TokenType::New => {
@@ -1011,7 +1013,6 @@ pub enum ExpressionKind<'a> {
     Reference { var: &'a Token },
     Dereference { val: Box<Expression<'a>> },
     Malloc { amount: Box<Expression<'a>> },
-    Free { var: Box<Expression<'a>> },
     New { name: ModuleAccessVariant, arguments: Vec<Expression<'a>> },
     Access { parent: Box<Expression<'a>>, child: &'a Token, ptr: bool },
     AccessFCall { parent: Box<Expression<'a>>, child: &'a Token, arguments: Vec<Expression<'a>> }
@@ -1115,6 +1116,7 @@ pub enum AST<'a> {
         other: Option<Vec<AST<'a>>>,
         elif: Vec<CondBlock<'a>>
     },
+    Free { val: Box<Expression<'a>>, cpos: CodePosition },
     CondLoop(CondBlock<'a>),
     Break(&'a Token),
     Continue(&'a Token),

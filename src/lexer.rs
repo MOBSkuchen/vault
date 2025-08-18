@@ -66,7 +66,7 @@ pub enum TokenType {
     New,
     Relative,
     Malloc,
-    Free,
+    Del,
     Directive,
     ModuleAccess,
     LBrackets,
@@ -140,7 +140,7 @@ impl TokenType {
             TokenType::Struct => "struct",
             TokenType::Relative => "~",
             TokenType::Malloc => "|>",
-            TokenType::Free => "|<",
+            TokenType::Del => "del",
             TokenType::Directive => "#",
             TokenType::ModuleAccess => "::",
             TokenType::LBrackets => "[",
@@ -177,6 +177,44 @@ impl CodePosition {
             line_end: line,
             line_idx_start: line_idx - 1,
             line_idx_end: line_idx,
+        }
+    }
+
+    pub fn encode(&self) -> String {
+        format!(
+            "{},{},{},{},{},{}",
+            self.idx_start,
+            self.idx_end,
+            self.line_start,
+            self.line_end,
+            self.line_idx_start,
+            self.line_idx_end
+        )
+    }
+
+    // MUST BE A VALID STRING!!!
+    pub fn decode(s: &str) -> Self {
+        println!("{}", s);
+        let parts: Vec<&str> = s.split(',').collect();
+
+        if parts.len() != 6 {
+            return ".".parse::<usize>().map(|_| unreachable!()).unwrap();
+        }
+
+        let idx_start = parts[0].parse::<usize>().unwrap();
+        let idx_end = parts[1].parse::<usize>().unwrap();
+        let line_start = parts[2].parse::<usize>().unwrap();
+        let line_end = parts[3].parse::<usize>().unwrap();
+        let line_idx_start = parts[4].parse::<usize>().unwrap();
+        let line_idx_end = parts[5].parse::<usize>().unwrap();
+
+        CodePosition {
+            idx_start,
+            idx_end,
+            line_start,
+            line_end,
+            line_idx_start,
+            line_idx_end,
         }
     }
 
@@ -495,9 +533,6 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 if let Some('>') = scanner.peek() {
                     scanner.pop();
                     return Ok(scanner.this_as_token(TokenType::Malloc));
-                } else if let Some('<') = scanner.peek() {
-                    scanner.pop();
-                    return Ok(scanner.this_as_token(TokenType::Free));
                 }
                 return Ok(scanner.this_as_token(TokenType::Pipe));
             }
@@ -527,6 +562,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "while" => TokenType::While,
                     "continue" => TokenType::Continue,
                     "struct" => TokenType::Struct,
+                    "del" => TokenType::Del,
                     "i32" => TokenType::I32,
                     "f32" => TokenType::F32,
                     "f64" => TokenType::F64,

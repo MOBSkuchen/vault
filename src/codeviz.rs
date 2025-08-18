@@ -11,6 +11,14 @@ pub fn print_code_error(code_error: CodeError, file_manager: &FileManager) {
             .label(code_error.pointer.unwrap().leak()),
     });
 
+    let mut snippets = vec![snip];
+
+    for ext in code_error.exts {
+        let (mut snip, offset) = file_manager.get_code_snippet(&ext.position);
+        snip = snip.annotation(Level::Error.span(ext.position.range(offset)).label(ext.pointer.leak()));
+        snippets.push(snip)
+    }
+
     let mut footers = vec![Level::Error.title(code_error.footer.as_str())];
 
     for note in &code_error.notes {
@@ -20,8 +28,8 @@ pub fn print_code_error(code_error: CodeError, file_manager: &FileManager) {
     let id_fmt = format!("{:#04x}", code_error.code_error_type as usize);
     let msg = Level::Error
         .title(code_error.title.as_str())
-        .id(&*id_fmt)
-        .snippet(snip)
+        .id(&id_fmt)
+        .snippets(snippets)
         .footers(footers);
 
     let renderer = Renderer::styled();

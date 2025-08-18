@@ -130,7 +130,8 @@ macro_rules! virtual_directive_args {
 #[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub enum FnSignals {
     Final,
-    IgnoreReservedName
+    IgnoreReservedName,
+    AllowDeadValue,
 }
 
 pub struct FunctionModifier {
@@ -247,6 +248,14 @@ pub fn visit_directive(directive: Directive, compilation_config: &mut Compilatio
                 values = directive.arguments,
             }
             Ok(FunctionModifier::passthrough(FnSignals::IgnoreReservedName))
+        }
+        "ALLOW_DEAD_VALUE" | "ZOMBIE" => {
+            virtual_directive_args! {
+                directive = directive,
+                args = [],
+                values = directive.arguments,
+            }
+            Ok(FunctionModifier::passthrough(FnSignals::AllowDeadValue))
         }
         "FINAL" => {
             virtual_directive_args! {

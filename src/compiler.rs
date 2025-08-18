@@ -93,18 +93,6 @@ fn basic_value_box_into_float<'a>(value: Box<(dyn BasicValue<'a> + 'a)>) -> Floa
     value.as_basic_value_enum().into_float_value()
 }
 
-fn get_type_alignment(typ: &TypesKind) -> u32 {
-    match typ {
-        TypesKind::I32 => 4,
-        TypesKind::F32 => 4,
-        TypesKind::U32 => 4,
-        TypesKind::I64 => 8,
-        TypesKind::F64 => 8,
-        TypesKind::U64 => 8,
-        _ => 1,
-    }
-}
-
 pub struct Compiler<'ctx> {
     context: &'ctx Context,
     builder: &'ctx Builder<'ctx>,
@@ -339,15 +327,22 @@ impl<'ctx> Compiler<'ctx> {
         Ok(match expr.expression {
             ExpressionKind::ModuleAccess(mav) => {
                 let def = self.resolve_mav(&mav, Some(&function.function_scope), global_scope)?;
-                match def.0 {
+                self.throw_dead_value(def.1.as_basic_value_enum(), expr.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
+                match &def.0 {
                     TypesKind::Struct { .. } | TypesKind::Array { .. } => {
-                        (Box::new(def.1), TypesKind::Ptr(Box::new(def.0.clone())))
+                        return Ok((Box::new(def.1), TypesKind::Ptr(Box::new(def.0.clone()))))
                     },
-                    _ => {
-                        let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
-                        (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
-                    }
-                }
+                    TypesKind::Ptr(x) => {
+                        if matches!(x.deref(), TypesKind::Array {..}) {
+                            return Ok((Box::new(def.1), *x.clone()))
+                        }
+                    },
+                    _ => {}
+                };
+                let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
+                let value = self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load");
+                self.throw_dead_value(value, expr.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
+                (Box::new(value), def.0.clone())
             }
             ExpressionKind::IntNumber { value, .. } => {
                 let (hint, vt) = hinted_int(type_hint, self.context);
@@ -390,7 +385,7 @@ impl<'ctx> Compiler<'ctx> {
                         }
                         // Call function, if it does not return a value (Void function) return null
                         // In that case the return value will NOT be used, because of other Void checks
-                        let call = self.builder.build_call(def.0, h_args.as_slice(), "").expect("Failed to load");
+                        let call = self.builder.build_call(def.0, h_args.as_slice(), "").expect("Failed to build call");
                         (Box::new(call.try_as_basic_value().left_or(self.null().as_basic_value_enum())), ret.as_ref().clone())
                     }
                     _ => Err(CodeError::symbol_not_a_function(&mav))?
@@ -437,7 +432,7 @@ impl<'ctx> Compiler<'ctx> {
                             }
                             // Call function, if it does not return a value (Void function) return null
                             // In that case the return value will NOT be used, because of other Void checks
-                            let call = self.builder.build_call(func.0, h_args.as_slice(), "").expect("Failed to load");
+                            let call = self.builder.build_call(func.0, h_args.as_slice(), "").expect("Failed to build call");
                             (Box::new(call.try_as_basic_value().left_or(self.null().as_basic_value_enum())), ret.as_ref().clone())
                         }
                         _ => Err(CodeError::symbol_not_a_function(&ModuleAccessVariant::Base { name: child.content.clone(), cpos: child.code_position }))?
@@ -575,6 +570,7 @@ impl<'ctx> Compiler<'ctx> {
                 let def = check_ls_gs_defs(&var.content, &function.function_scope, global_scope).ok_or_else(|| {
                     CodeError::symbol_not_found(var)
                 })?;
+                self.throw_dead_value(def.1.as_basic_value_enum(), var.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
                 (Box::new(def.1.as_basic_value_enum()), TypesKind::Ptr(Box::new(def.0.clone())))
             }
             ExpressionKind::Dereference { val } => {
@@ -592,6 +588,7 @@ impl<'ctx> Compiler<'ctx> {
                 let ty = self.convert_type_normal(deref_type, global_scope, val_cpos)?;
                 let value = self.builder.build_load(ty, def.0.as_basic_value_enum().into_pointer_value(), "")
                     .expect("Load (deref) failed").as_basic_value_enum();
+                self.throw_dead_value(value, expr.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
                 (Box::new(value), *deref_type.clone())
             },
             ExpressionKind::New { name: mav, arguments } => {
@@ -621,16 +618,14 @@ impl<'ctx> Compiler<'ctx> {
                 let struct_ptr = self.builder.build_alloca(struct_type, "struct_alloc").expect("Failed to struct alloc");
 
                 for (i, (val, _ty)) in params.into_iter().enumerate() {
-                    let gep = unsafe {
-                        self.builder.build_struct_gep(struct_type, struct_ptr, i as u32, &format!("field_{i}"))
-                            .expect("GEP failed - invalid field index?")
-                    };
+                    let gep = self.builder.build_struct_gep(struct_type, struct_ptr, i as u32, &format!("field_{i}"))
+                            .expect("GEP failed - invalid field index?");
                     self.builder.build_store(gep, val.as_basic_value_enum()).expect("Failed store");
                 }
 
                 // Load the struct value (optional: you can return the pointer if that fits your ABI)
                 let loaded_struct = self.builder.build_load(struct_type, struct_ptr, "load_struct").expect("Failed to load struct");
-
+                self.throw_dead_value(loaded_struct, expr.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
                 (Box::new(loaded_struct), virtual_struct_type)
             }
             ExpressionKind::Access { parent, child, ptr } => {
@@ -654,12 +649,14 @@ impl<'ctx> Compiler<'ctx> {
                     let (_, field_type) = &stct[item];
                     let llvm_struct_type = self.convert_type_normal(inner_struct_type, global_scope, child.code_position)?.as_basic_type_enum();
                     let val_ptr = self.builder.build_struct_gep(llvm_struct_type, parent_value.as_basic_value_enum().into_pointer_value(), item as u32, "").expect("Failed to GEP struct item ptr");
+                    self.throw_dead_value(val_ptr.as_basic_value_enum(), expr.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
                     let ret_typ = if ptr {TypesKind::Ptr(Box::new(field_type.clone()))} else { field_type.clone()};
                     if ptr {
                         (Box::new(val_ptr), ret_typ)
                     } else {
                         let llvm_field_type = self.convert_type_normal(field_type, global_scope, child.code_position)?.as_basic_type_enum();
                         let loaded = self.builder.build_load(llvm_field_type, val_ptr, "").expect("Failed to load struct access ptr");
+                        self.throw_dead_value(loaded, expr.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
                         (Box::new(loaded), ret_typ)
                     }
                 } else {
@@ -675,34 +672,20 @@ impl<'ctx> Compiler<'ctx> {
                 let ptr = self.builder.build_array_malloc(self.context.i8_type(), value.as_basic_value_enum().into_int_value(), "").expect("Failed to build malloc");
                 (Box::new(ptr.as_basic_value_enum()), TypesKind::Ptr(Box::new(TypesKind::U8)))
             }
-            ExpressionKind::Free { var } => {
-                // TODO: Maybe make this a statement?
-                let cpos = var.code_position;
-                let (value, typ) = self.visit_expr(function, global_scope, *var, Some(&TypesKind::Pointer), false)?;
-                if !matches!(typ, TypesKind::Ptr(_) | TypesKind::Pointer) {
-                    return Err(CodeError::can_only_free_pointers(cpos, typ))
-                }
-                self.builder.build_free(value.as_basic_value_enum().into_pointer_value()).expect("Failed to free");
-                (value, typ)
-            },
             ExpressionKind::Index { index, child, ret_ptr } => {
                 let child_cpos = child.code_position;
                 let (value, child_type) = self.visit_expr(function, global_scope, *child, None, true)?;
-                let inner_type;
-                let typ = match &child_type {
+                let inner_type = match &child_type {
                     TypesKind::Ptr(ptr) => {
                         match ptr.deref() {
-                            TypesKind::Array { inner, .. } => {
-                                inner_type = inner.deref();
-                                let typ = self.convert_type_normal(inner_type, global_scope, child_cpos)?;
-                                // value = Box::new(self.builder.build_load(typ, value.as_basic_value_enum().into_pointer_value(), "").expect("Failed to load array"));
-                                typ
-                            }
-                            _ => { inner_type = ptr.deref(); self.convert_type_normal(inner_type, global_scope, child_cpos)? },
+                            TypesKind::Array { inner, .. } => inner.deref(),
+                            _ => ptr.deref(),
                         }
                     }
+                    TypesKind::Array { inner, .. } => inner.deref(),
                     _ => return Err(CodeError::array_index(child_cpos))
                 };
+                let typ = self.convert_type_normal(inner_type, global_scope, child_cpos)?;
                 let begin = self.get_as_index_expr(function, global_scope, *index, vec![TypesKind::U8, TypesKind::U32, TypesKind::U64], TypesKind::U32)?.0.as_basic_value_enum().into_int_value();
                 let zero = begin.get_type().const_int(0, false);
                 let ptr = unsafe { self.builder.build_in_bounds_gep(typ, value.as_basic_value_enum().into_pointer_value(), &[zero], "").expect("Failed to build GEP array instr") };
@@ -780,6 +763,14 @@ impl<'ctx> Compiler<'ctx> {
 
         // Position the builder at the end of the loop exit block.
         self.builder.position_at_end(loop_exit_block);
+    }
+
+    fn throw_dead_value(&self, value: BasicValueEnum, cpos: CodePosition, allow_dead_value: bool) -> CodeResult<()> {
+        let name = value.get_name().to_str().expect("Failed to get value name!");
+        if !allow_dead_value && name.starts_with("dead") {
+            let del_pos = CodePosition::decode(&name[4..]);
+            Err(CodeError::dead_value_used(cpos, del_pos))
+        } else {Ok(())}
     }
 
     fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, loop_after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
@@ -880,6 +871,15 @@ impl<'ctx> Compiler<'ctx> {
 
                 self.builder.position_at_end(after_block);
                 return Ok((inside_loop, false));
+            }
+            AST::Free { val, cpos } => {
+                let val_cpos = val.code_position;
+                let (value, typ) = self.visit_expr(function, global_scope, *val, Some(&TypesKind::Pointer), false)?;
+                if !matches!(typ, TypesKind::Ptr(_) | TypesKind::Pointer) {
+                    return Err(CodeError::can_only_free_pointers(val_cpos, typ))
+                }
+                self.builder.build_free(value.as_basic_value_enum().into_pointer_value()).expect("Failed to free");
+                value.set_name(format!("dead{}", cpos.encode()).as_str())
             }
             AST::IfCondition { first, other, elif } => {
                 let if_after_block = function.new_block("if_after", false);
@@ -1041,6 +1041,7 @@ impl<'ctx> Compiler<'ctx> {
     fn ast_to_codepos(ast: &AST) -> CodePosition {
         match ast {
             AST::Expression { expr } => expr.code_position,
+            AST::Free { cpos, .. } => *cpos,
             AST::FunctionDef { name, .. } => name.code_position,
             AST::VariableDef { name, .. } => name.code_position,
             AST::VariableReassign { name, .. } => name.ensured_compute_codeposition(),
