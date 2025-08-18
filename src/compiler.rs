@@ -687,8 +687,7 @@ impl<'ctx> Compiler<'ctx> {
                 };
                 let typ = self.convert_type_normal(inner_type, global_scope, child_cpos)?;
                 let begin = self.get_as_index_expr(function, global_scope, *index, vec![TypesKind::U8, TypesKind::U32, TypesKind::U64], TypesKind::U32)?.0.as_basic_value_enum().into_int_value();
-                let zero = begin.get_type().const_int(0, false);
-                let ptr = unsafe { self.builder.build_in_bounds_gep(typ, value.as_basic_value_enum().into_pointer_value(), &[zero], "").expect("Failed to build GEP array instr") };
+                let ptr = unsafe { self.builder.build_in_bounds_gep(typ, value.as_basic_value_enum().into_pointer_value(), &[begin], "").expect("Failed to build GEP array instr") };
                 if ret_ptr {
                     (Box::new(ptr), TypesKind::Ptr(Box::new(inner_type.clone())))
                 } else {
