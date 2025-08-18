@@ -73,7 +73,9 @@ pub enum CodeErrorType {
     WrongFirstMethodParam,
     ReservedName,
     UnknownMemberFunction,
-    StructReassignmentTypeMismatch,
+    ReassignmentTypeMismatch,
+    ArrayIndexNotOnArray,
+    InvalidTypedExpression,
 }
 
 #[derive(Debug)]
@@ -154,6 +156,29 @@ impl CodeError {
             Some("But was used here".to_string()),
             "Use a different type, but not void".to_string(),
             vec![],
+        )
+    }
+
+    pub fn array_index(cpos: CodePosition) -> Self {
+        Self::new(
+            cpos,
+            CodeErrorType::ArrayIndexNotOnArray,
+            "Array index on generic pointer".to_string(),
+            Some("This expression".to_string()),
+            "You may only index arrays (pointers to arrays, which are just typed pointers)".to_string(),
+            vec!["You may be using a generic pointer to refer to an array. You should cast it into [..]*".to_string()],
+        )
+    }
+
+    pub fn invalid_types_expression(cpos: CodePosition, types_kind: TypesKind, valid: &Vec<TypesKind>) -> Self {
+        Self::new(
+            cpos,
+            CodeErrorType::InvalidTypedExpression,
+            "Expression type is invalid".to_string(),
+            Some("This expression".to_string()),
+            format!("This expression may not have the type {types_kind}"),
+            // TODO: Show valid types here
+            vec![format!("The following ones are valid: TODO", )]
         )
     }
 
@@ -268,14 +293,16 @@ impl CodeError {
         )
     }
 
-    pub fn struct_reassignment(pos: &CodePosition, got: &TypesKind, requires: &TypesKind) -> Self {
+    pub fn reassignment(pos: &CodePosition, got: &TypesKind, requires: &TypesKind) -> Self {
         Self::new(
             *pos,
-            CodeErrorType::StructReassignmentTypeMismatch,
-            "Struct property reassignment type mismatch".to_string(),
+            CodeErrorType::ReassignmentTypeMismatch,
+            "Reassignment type mismatch".to_string(),
             Some(format!("lhs of type `{got}` and rhs of type `{requires}`")),
-            "To reassign a property of a struct the lhs of the assignment must be pointer to the type, and the rhs must be of that type".to_string(),
-            vec!["If you're using '.': use `stct~prop = value` => '~' instead of '.'".to_string()]
+            "To reassign, the lhs of the assignment must be pointer, and the rhs must be of the underlying type".to_string(),
+            vec![
+                "For structs: If you're using '.': use `stct~prop = value` => '~' instead of '.'".to_string(),
+                "For arrays: You may want to remove the dereference symbol, so `array[?index] = value` or `*array[index] = value` => `array[index] = value`".to_string()]
         )
     }
 

@@ -559,8 +559,14 @@ impl<'a> Parser<'a> {
                 Ok(Expression { expression: ExpressionKind::Access { parent: Box::new(node), child, ptr: false }, code_position: cpos.merge(child.code_position) })
             }
         } else if self.match_token(pointer, TokenType::Relative)? {
-            let child = self.consume(pointer, TokenType::Identifier, Some("Can only access identifiers".to_string()))?;
+            let child = self.consume(pointer, TokenType::Identifier, Some("Can only (relative) access identifiers".to_string()))?;
             return Ok(Expression { expression : ExpressionKind::Access {parent: Box::new(node), child, ptr: true}, code_position: cpos.merge(child.code_position)})
+        } else if self.match_token(pointer, TokenType::LBrackets)? {
+            let ret_ptr = !self.match_token(pointer, TokenType::QuestionMark)?;
+            let index = Box::new(self.parse_expression(pointer)?);
+            let node_cpos = node.code_position;
+            self.consume(pointer, TokenType::RBrackets, None)?;
+            return Ok(Expression { expression : ExpressionKind::Index {child: Box::new(node), ret_ptr, index}, code_position: cpos.merge(node_cpos)})
         }
         Ok(node)
     }
@@ -643,7 +649,7 @@ impl<'a> Parser<'a> {
                 },
                 TokenType::Star => {
                     Ok(Expression {expression: ExpressionKind::Dereference {
-                        var: self.consume(pointer, TokenType::Identifier, Some("`*` is a deref-token, which must be followed by a variable to a pointer".to_string()))? }
+                        val: Box::new(self.parse_expression(pointer)?) }
                         , code_position: token.code_position.merge(self.tokens[*pointer - 1].code_position) })
                 }
                 TokenType::Malloc => {
@@ -694,6 +700,15 @@ impl<'a> Parser<'a> {
                     let val = token.content.parse().unwrap();
                     Ok((ExpressionKind::FloatNumber { value: val, token }).into_expression(token.code_position))
                 }
+                TokenType::LBrackets => {
+                    let start_cpos = self.tokens[*pointer-1].code_position;
+                    let inner = self.parse_expression(pointer)?;
+                    let inner = Box::new(inner);
+                    self.consume(pointer, TokenType::Colon, None)?;
+                    let size = Box::new(self.parse_expression(pointer)?);
+                    let end_cpos = self.consume(pointer, TokenType::RBrackets, None)?.code_position;
+                    Ok(Expression {expression: ExpressionKind::CreateArrayFill {inner, size}, code_position: start_cpos.merge(end_cpos) })
+                },
                 TokenType::LParen => {
                     let expr = self.parse_expression(pointer)?;
                     self.consume(pointer, TokenType::RParen, None)?;
@@ -723,6 +738,14 @@ impl<'a> Parser<'a> {
             else if self.match_token(pointer, TokenType::Void)? { Ok(TypesKind::Void) }
             else if self.match_token(pointer, TokenType::Ptr)? { Ok(TypesKind::Pointer) }
             else if self.match_token(pointer, TokenType::Bool)? { Ok(TypesKind::Bool) }
+            else if self.match_token(pointer, TokenType::LBrackets)? {
+                let inner = Box::new(self.parse_type(pointer)?.kind);
+                let size = if self.match_token(pointer, TokenType::SemiColon)? {
+                    Some(self.consume(pointer, TokenType::NumberInt, None).unwrap().content.parse().unwrap())
+                } else {None};
+                self.consume(pointer, TokenType::RBrackets, None)?;
+                Ok(TypesKind::Array {inner, size})
+            }
             else if self.match_token(pointer, TokenType::Identifier)? { Ok(TypesKind::Struct {name: self.parse_mav(pointer)? }) }
             else {Err(CodeError::not_a_type_error(&self.tokens[*pointer]))})?;
 
@@ -797,7 +820,7 @@ impl Into<Linkage> for FunctionMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TypesKind {
     I32,
     F32,
@@ -812,6 +835,44 @@ pub enum TypesKind {
     Struct {name: ModuleAccessVariant},
     Function {ret: Box<TypesKind>, params: Vec<TypesKind>},
     Bool,
+    Array {
+        inner: Box<TypesKind>,
+        size: Option<u64>
+    }
+}
+
+impl PartialEq for TypesKind {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+
+            (TypesKind::Array { inner: inner_self, size: size_self }, TypesKind::Array { inner: inner_other, size: size_other }) => {
+                let inner_types_match = inner_self == inner_other;
+                let sizes_match = match (size_self, size_other) {
+                    (Some(s_self), Some(s_other)) => s_self == s_other,
+                    _ => true,
+                };
+                inner_types_match && sizes_match
+            }
+
+            (TypesKind::I32, TypesKind::I32) => true,
+            (TypesKind::F32, TypesKind::F32) => true,
+            (TypesKind::U32, TypesKind::U32) => true,
+            (TypesKind::I64, TypesKind::I64) => true,
+            (TypesKind::F64, TypesKind::F64) => true,
+            (TypesKind::U64, TypesKind::U64) => true,
+            (TypesKind::U8, TypesKind::U8) => true,
+            (TypesKind::Void, TypesKind::Void) => true,
+            (TypesKind::Ptr(inner_self), TypesKind::Ptr(inner_other)) => inner_self == inner_other,
+            (TypesKind::Pointer, TypesKind::Pointer) => true,
+            (TypesKind::Struct { name: name_self }, TypesKind::Struct { name: name_other }) => name_self == name_other,
+            (TypesKind::Function { ret: ret_self, params: params_self }, TypesKind::Function { ret: ret_other, params: params_other }) => {
+                ret_self == ret_other && params_self == params_other
+            }
+            (TypesKind::Bool, TypesKind::Bool) => true,
+
+            _ => false,
+        }
+    }
 }
 
 impl Display for TypesKind {
@@ -830,6 +891,13 @@ impl Display for TypesKind {
             TypesKind::Ptr(ptr) => write!(f, "{}*", ptr),
             TypesKind::Pointer => write!(f, "ptr"),
             TypesKind::Bool => write!(f, "bool"),
+            TypesKind::Array {inner, size} => {
+                if let Some(size) = size {
+                    write!(f, "[{inner}; {size}]")
+                } else {
+                    write!(f, "[{inner}]")
+                }
+            }
         }
     }
 }
@@ -928,13 +996,20 @@ pub enum ExpressionKind<'a> {
         value: f64,
         token: &'a Token,
     },
+    Index {
+        index: Box<Expression<'a>>,
+        child: Box<Expression<'a>>,
+        ret_ptr: bool,
+    },
+    // TODO: Add CreateArrayRegular
+    CreateArrayFill {inner: Box<Expression<'a>>, size: Box<Expression<'a>>},
     String(&'a Token),
     ModuleAccess(ModuleAccessVariant),
     BinaryOp { lhs: Box<Expression<'a>>, op: (&'a Token, BinaryOp), rhs: Box<Expression<'a>> },
     CastExpr { expr: Box<Expression<'a>>, typ: Types },
     FunctionCall { name: ModuleAccessVariant, arguments: Vec<Expression<'a>> },
     Reference { var: &'a Token },
-    Dereference { var: &'a Token },
+    Dereference { val: Box<Expression<'a>> },
     Malloc { amount: Box<Expression<'a>> },
     Free { var: Box<Expression<'a>> },
     New { name: ModuleAccessVariant, arguments: Vec<Expression<'a>> },

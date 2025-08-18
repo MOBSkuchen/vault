@@ -7,7 +7,7 @@ use inkwell::builder::{Builder};
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType, FunctionType, IntType, StructType};
-use inkwell::values::{BasicValue, FloatValue, FunctionValue, InstructionOpcode, IntValue, PointerValue};
+use inkwell::values::{AsValueRef, BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue, PointerValue};
 use crate::codeviz::print_code_warn;
 use crate::comp_errors::{CodeError, CodeResult, CodeWarning};
 use crate::{MixedResult};
@@ -93,6 +93,18 @@ fn basic_value_box_into_float<'a>(value: Box<(dyn BasicValue<'a> + 'a)>) -> Floa
     value.as_basic_value_enum().into_float_value()
 }
 
+fn get_type_alignment(typ: &TypesKind) -> u32 {
+    match typ {
+        TypesKind::I32 => 4,
+        TypesKind::F32 => 4,
+        TypesKind::U32 => 4,
+        TypesKind::I64 => 8,
+        TypesKind::F64 => 8,
+        TypesKind::U64 => 8,
+        _ => 1,
+    }
+}
+
 pub struct Compiler<'ctx> {
     context: &'ctx Context,
     builder: &'ctx Builder<'ctx>,
@@ -128,6 +140,15 @@ impl<'ctx> Compiler<'ctx> {
                 TypesKind::F64 => Ok(self.context.f64_type().as_type_ref()),
                 TypesKind::U8 => Ok(self.context.i8_type().as_type_ref()),
                 TypesKind::Bool => Ok(self.context.custom_width_int_type(1).as_type_ref()),
+                TypesKind::Array { inner, size } => {
+                    let inner = self.convert_type_normal(inner, global_scope, cpos)?.ptr_type(AddressSpace::default());
+                    if let Some(size) = size {
+                        Ok(inner.array_type(*size as u32).as_type_ref())
+                    }
+                    else {
+                        Ok(inner.as_type_ref())
+                    }
+                }
             }?))
         }
     }
@@ -160,6 +181,12 @@ impl<'ctx> Compiler<'ctx> {
             TypesKind::F64 => Ok(self.context.f64_type().fn_type(&param_types, false).as_type_ref()),
             TypesKind::U8 => Ok(self.context.i8_type().fn_type(&param_types, false).as_type_ref()),
             TypesKind::Bool => Ok(self.context.custom_width_int_type(1).fn_type(&param_types, false).as_type_ref()),
+            TypesKind::Array { inner, size } => {
+                let inner = self.convert_type_normal(inner, global_scope, cpos)?.ptr_type(AddressSpace::default());
+                let inner = if let Some(size) = size { inner.array_type(*size as u32).as_basic_type_enum() }
+                else { inner.as_basic_type_enum() };
+                Ok(inner.fn_type(&param_types, false).as_type_ref())
+            }
         }?;
         unsafe { Ok(FunctionType::new(t_ref)) }
     }
@@ -297,16 +324,29 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    fn get_as_index_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace<'a>, expr: Expression, valid: Vec<TypesKind>, recommend: TypesKind) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
+        let cpos = expr.code_position;
+        let (value, typ) = self.visit_expr(function, global_scope, expr, Some(&recommend), true)?;
+        if matches!(&typ, valid) {
+            Ok((Box::new(value.as_basic_value_enum()), typ))
+        } else {
+            Err(CodeError::invalid_types_expression(cpos, typ, &valid))
+        }
+    }
+
     fn visit_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace<'_>, expr: Expression, 
                       type_hint: Option<&TypesKind>, must_use: bool) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
         Ok(match expr.expression {
             ExpressionKind::ModuleAccess(mav) => {
                 let def = self.resolve_mav(&mav, Some(&function.function_scope), global_scope)?;
-                if matches!(def.0, TypesKind::Struct { name: _ }) {
-                    (Box::new(def.1), TypesKind::Ptr(Box::new(def.0.clone())))
-                } else {
-                    let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
-                    (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
+                match def.0 {
+                    TypesKind::Struct { .. } | TypesKind::Array { .. } => {
+                        (Box::new(def.1), TypesKind::Ptr(Box::new(def.0.clone())))
+                    },
+                    _ => {
+                        let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
+                        (Box::new(self.builder.build_load(real_type.as_basic_type_enum(), def.1, "").expect("Failed to load")), def.0.clone())
+                    }
                 }
             }
             ExpressionKind::IntNumber { value, .. } => {
@@ -358,7 +398,7 @@ impl<'ctx> Compiler<'ctx> {
             }
             ExpressionKind::AccessFCall { parent, child, arguments } => {
                 let parent_cpos = parent.code_position;
-                let (mut struct_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
+                let (struct_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
                 let inner_struct_type;
                 let (_, stct_name) = match &parent_type {
                     TypesKind::Ptr(ptr) => {
@@ -416,7 +456,7 @@ impl<'ctx> Compiler<'ctx> {
                 let real_new_typ = self.convert_type_normal(&new_type.kind, global_scope, new_type.cpos)?
                     .as_basic_type_enum();
 
-                let result = match old_type {
+                let result = match &old_type {
                     TypesKind::I32 | TypesKind::U32 | TypesKind::U8 | TypesKind::I64 | TypesKind::U64 | TypesKind::Bool => {
                         let int_val = value.into_int_value();
                         match &new_type.kind {
@@ -447,6 +487,7 @@ impl<'ctx> Compiler<'ctx> {
                                     .ok()
                             }
                             TypesKind::Void => None,
+                            TypesKind::Array {..} => None,
                             TypesKind::Ptr(_) | TypesKind::Pointer => {
                                 self.builder
                                     .build_int_to_ptr(int_val, real_new_typ.into_pointer_type(), "")
@@ -508,6 +549,22 @@ impl<'ctx> Compiler<'ctx> {
                         }
                     }
                     TypesKind::Void | TypesKind::Struct { .. } | TypesKind::Function { .. } => None,
+                    TypesKind::Array { inner, .. } => {
+                        let ptr_val = value.into_pointer_value();
+                        match &new_type.kind {
+                            TypesKind::Ptr(ptr_type) if inner == ptr_type => {
+                                Some(value)
+                            }
+                            TypesKind::Pointer => {
+                                let target_type = self.context.ptr_type(AddressSpace::default());
+                                self.builder
+                                    .build_pointer_cast(ptr_val, target_type, "")
+                                    .map(|v| v.as_basic_value_enum())
+                                    .ok()
+                            }
+                            _ => None,
+                        }
+                    }
                 };
 
                 (Box::new(result.ok_or_else(|| {
@@ -520,25 +577,20 @@ impl<'ctx> Compiler<'ctx> {
                 })?;
                 (Box::new(def.1.as_basic_value_enum()), TypesKind::Ptr(Box::new(def.0.clone())))
             }
-            ExpressionKind::Dereference { var } => {
-                let def = check_ls_gs_defs(&var.content, &function.function_scope, global_scope).ok_or_else(|| {
-                    CodeError::symbol_not_found(var)
-                })?;
+            ExpressionKind::Dereference { val } => {
+                let val_cpos = val.code_position;
+                let def = self.visit_expr(function, global_scope, *val, Some(&TypesKind::Pointer), true)?;
                 
-                let deref_type = match &def.0 {
+                let deref_type = match &def.1 {
                     TypesKind::Ptr(ptr_t) => {ptr_t},
                     TypesKind::Pointer => &{ Box::new(TypesKind::Void) },
                     _ => {
-                        return Err(CodeError::type_mismatch(&var.code_position, &def.0, &TypesKind::Pointer, vec!["Only pointers can be dereferenced, but this variable is not a pointer".to_string()]))
+                        return Err(CodeError::type_mismatch(&val_cpos, &def.1, &TypesKind::Pointer, vec!["Only pointers can be dereferenced, but this variable is not a pointer".to_string()]))
                     }
                 };
 
-                let ptr_t = self.convert_type_normal(&def.0, global_scope, var.code_position)?;
-                let real_deref_type = self.convert_type_normal(deref_type, global_scope, var.code_position)?;
-                
-                let ptr = self.builder.build_load(ptr_t.as_basic_type_enum(), def.1, "")
-                    .expect("Load (deref) failed").as_basic_value_enum().into_pointer_value();
-                let value = self.builder.build_load(real_deref_type.as_basic_type_enum(), ptr, "")
+                let ty = self.convert_type_normal(deref_type, global_scope, val_cpos)?;
+                let value = self.builder.build_load(ty, def.0.as_basic_value_enum().into_pointer_value(), "")
                     .expect("Load (deref) failed").as_basic_value_enum();
                 (Box::new(value), *deref_type.clone())
             },
@@ -583,7 +635,7 @@ impl<'ctx> Compiler<'ctx> {
             }
             ExpressionKind::Access { parent, child, ptr } => {
                 let parent_cpos = parent.code_position;
-                let (mut parent_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
+                let (parent_value, parent_type) = self.visit_expr(function, global_scope, *parent, None, true)?;
                 let inner_struct_type;
                 let (stct, stct_name) = match &parent_type {
                     TypesKind::Ptr(ptr) => {
@@ -633,7 +685,101 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_free(value.as_basic_value_enum().into_pointer_value()).expect("Failed to free");
                 (value, typ)
             },
+            ExpressionKind::Index { index, child, ret_ptr } => {
+                let child_cpos = child.code_position;
+                let (value, child_type) = self.visit_expr(function, global_scope, *child, None, true)?;
+                let inner_type;
+                let typ = match &child_type {
+                    TypesKind::Ptr(ptr) => {
+                        match ptr.deref() {
+                            TypesKind::Array { inner, .. } => {
+                                inner_type = inner.deref();
+                                let typ = self.convert_type_normal(inner_type, global_scope, child_cpos)?;
+                                // value = Box::new(self.builder.build_load(typ, value.as_basic_value_enum().into_pointer_value(), "").expect("Failed to load array"));
+                                typ
+                            }
+                            _ => { inner_type = ptr.deref(); self.convert_type_normal(inner_type, global_scope, child_cpos)? },
+                        }
+                    }
+                    _ => return Err(CodeError::array_index(child_cpos))
+                };
+                let begin = self.get_as_index_expr(function, global_scope, *index, vec![TypesKind::U8, TypesKind::U32, TypesKind::U64], TypesKind::U32)?.0.as_basic_value_enum().into_int_value();
+                let zero = begin.get_type().const_int(0, false);
+                let ptr = unsafe { self.builder.build_in_bounds_gep(typ, value.as_basic_value_enum().into_pointer_value(), &[zero], "").expect("Failed to build GEP array instr") };
+                if ret_ptr {
+                    (Box::new(ptr), TypesKind::Ptr(Box::new(inner_type.clone())))
+                } else {
+                    let llvm_type = self.convert_type_normal(inner_type, global_scope, child_cpos)?;
+                    let element = self.builder.build_load(llvm_type, ptr, "").expect("Failed to build load from array");
+                    (Box::new(element), inner_type.clone())
+                }
+            }
+            // TODO: CreateArrayFill will use malloc and CreateArrayRegular will use alloca. Idk if this is optimal
+            ExpressionKind::CreateArrayFill { inner, size } => {
+                let inner_cpos = inner.code_position;
+                let size_cpos = size.code_position;
+                let (size, size_t) = self.get_as_index_expr(function, global_scope, *size, vec![TypesKind::U8, TypesKind::U32, TypesKind::U64], TypesKind::U32)?;
+                let size_llvm_type = self.convert_type_normal(&size_t, global_scope, size_cpos)?;
+                let (value, inner_type) = self.visit_expr(function, global_scope, *inner, Some(&TypesKind::I32), true)?;
+                let llvm_type = self.convert_type_normal(&inner_type, global_scope, inner_cpos)?;
+                let size = size.as_basic_value_enum().into_int_value();
+                let ptr = self.builder.build_array_malloc(llvm_type, size, "").expect("Failed to malloc array");
+
+                self.fill_array(function, ptr, value.as_basic_value_enum(), llvm_type, size, size_llvm_type.into_int_type());
+
+                (Box::new(ptr), TypesKind::Array {inner: Box::new(inner_type), size: None})
+            }
         })
+    }
+
+
+    fn fill_array(&self, function: &Function, array: PointerValue, value: BasicValueEnum, typ: BasicTypeEnum, size: IntValue, size_typ: IntType) {
+        let loop_header_block = self.context.append_basic_block(function.function_value, "loop_header");
+        let loop_body_block = self.context.append_basic_block(function.function_value, "loop_body");
+        let loop_exit_block = self.context.append_basic_block(function.function_value, "loop_exit");
+
+        let counter = self.builder.build_alloca(size_typ, "").expect("Failed to alloca counter for fill_array");
+        self.builder.build_store(counter, size_typ.const_int(0, false)).expect("Failed to store 0 in counter for fill_array");
+
+        // Jump from the entry block to the loop header.
+        self.builder.build_unconditional_branch(loop_header_block).expect("Failed to build uncond branch for fill_array");
+        self.builder.position_at_end(loop_header_block);
+
+        // Load the current counter value and compare it to the array length.
+        let current_i = self.builder.build_load(size_typ, counter, "").expect("Failed to load counter for fill_array").into_int_value();
+        let loop_condition = self.builder.build_int_compare(
+            IntPredicate::ULT,
+            current_i,
+            size,
+            "",
+        ).expect("Failed to build cmp uint for fill_array");
+
+        // Based on the condition, branch to the loop body or the exit block.
+        self.builder.build_conditional_branch(loop_condition, loop_body_block, loop_exit_block).expect("Failed to build branch for fill_array");
+        self.builder.position_at_end(loop_body_block);
+
+        // Calculate the address of the current element within the array.
+        // The GEP instruction uses the array pointer and a single index (`current_i`)
+        // to step through the array elements.
+        let element_ptr = unsafe {
+            self.builder.build_in_bounds_gep(
+                typ,
+                array,
+                &[current_i],
+                "",
+            )
+        }.expect("Failed to get ptr to current index for fill_array");
+
+        self.builder.build_store(element_ptr, value).expect("Failed to store value in array for fill_array");
+
+        let next_i = self.builder.build_int_add(current_i, size_typ.const_int(1, false), "").expect("Failed to inc counter for fill_array");
+
+        // Store the new counter value and jump back to the loop header.
+        self.builder.build_store(counter, next_i).expect("Failed to store new counter");
+        self.builder.build_unconditional_branch(loop_header_block).expect("Failed to uncond branch to exit loop");
+
+        // Position the builder at the end of the loop exit block.
+        self.builder.position_at_end(loop_exit_block);
     }
 
     fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, loop_after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
@@ -655,9 +801,17 @@ impl<'ctx> Compiler<'ctx> {
                     } else {
                         self.visit_expr(function, global_scope, value, None, true)?
                     };
-                    let pointer = self.builder.build_alloca(self.convert_type_normal(&typ, global_scope, typ_tok)?.as_basic_type_enum(), "").expect("Can not allocate for var-define");
-                    self.builder.build_store(pointer, expr.as_basic_value_enum()).expect("Failed to store value of variable define");
-                    (typ, pointer)
+                    let llvm_typ = self.convert_type_normal(&typ, global_scope, typ_tok)?.as_basic_type_enum();
+                    // Optimization: Pointers don't have to be stored again, they already are
+                    if llvm_typ.is_pointer_type() {
+                        let v = expr.as_basic_value_enum().into_pointer_value().as_value_ref();
+                        // Evil magic trick
+                        (typ, unsafe { BasicValueEnum::new(v) }.into_pointer_value())
+                    } else {
+                        let pointer = self.builder.build_alloca(llvm_typ, "").expect("Can not allocate for var-define");
+                        self.builder.build_store(pointer, expr.as_basic_value_enum()).expect("Failed to store value of variable define");
+                        (typ, pointer)
+                    }
                 } else {
                     let typ = typ.unwrap();
                     (typ.kind.clone(), self.builder.build_alloca(self.convert_type_normal(&typ.kind, global_scope, typ_tok)?.as_basic_type_enum(), "").expect("Can not allocate for var-declare"))
@@ -865,10 +1019,10 @@ impl<'ctx> Compiler<'ctx> {
                 match &val_typ {
                     TypesKind::Pointer => {}
                     TypesKind::Ptr(underlying) => {
-                        if assign_typ != **underlying { return Err(CodeError::struct_reassignment(&cpos, &val_typ, &assign_typ)); }
+                        if assign_typ != **underlying { return Err(CodeError::reassignment(&cpos, &val_typ, &assign_typ)); }
                     }
                     _ => {
-                        return Err(CodeError::struct_reassignment(&cpos, &val_typ, &assign_typ));
+                        return Err(CodeError::reassignment(&cpos, &val_typ, &assign_typ));
                     }
                 }
 

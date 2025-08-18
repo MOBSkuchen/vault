@@ -69,6 +69,9 @@ pub enum TokenType {
     Free,
     Directive,
     ModuleAccess,
+    LBrackets,
+    RBrackets,
+    QuestionMark,
 
     // Virtual types
     Expression,
@@ -140,6 +143,9 @@ impl TokenType {
             TokenType::Free => "|<",
             TokenType::Directive => "#",
             TokenType::ModuleAccess => "::",
+            TokenType::LBrackets => "[",
+            TokenType::RBrackets => "]",
+            TokenType::QuestionMark => "?"
         })
             .to_string()
     }
@@ -359,7 +365,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 }
             }
 
-            '(' | ')' | ',' | '.' | '+' | '*' | ';' | '{' | '}' | '#' => {
+            '(' | ')' | ',' | '.' | '+' | '*' | ';' | '{' | '}' | '#' | '[' | ']' | '?' => {
                 let token_type = match current {
                     '(' => TokenType::LParen,
                     ')' => TokenType::RParen,
@@ -371,7 +377,10 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     ';' => TokenType::SemiColon,
                     '{' => TokenType::LBrace,
                     '}' => TokenType::RBrace,
+                    '[' => TokenType::LBrackets,
+                    ']' => TokenType::RBrackets,
                     '#' => TokenType::Directive,
+                    '?' => TokenType::QuestionMark,
                     _ => unreachable!(),
                 };
                 scanner.pop();
@@ -481,7 +490,6 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 }
                 return Ok(scanner.this_as_token(TokenType::Equals));
             }
-
             '|' => {
                 scanner.pop();
                 if let Some('>') = scanner.peek() {
