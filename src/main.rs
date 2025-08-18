@@ -198,6 +198,7 @@ struct LinkJobData {
     entry: String,
     dev_debug_level: DevDebugLevel,
     debug: bool,
+    optimization: OptLevel
 }
 
 impl Display for CompileJobData {
@@ -321,7 +322,7 @@ fn compile_and_link(filepath: String, link_job_data: LinkJobData) {
     let compile_job_data = CompileJobData {
         output: tmp_file.clone(),
         target_triple: TargetMachine::get_default_triple(),
-        optimization: OptLevel::Full,
+        optimization: link_job_data.optimization,
         module_id: "main".to_string(),
         output_type: CompOutputType::Object,
         dev_debug_level: link_job_data.dev_debug_level,
@@ -463,6 +464,13 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                         .action(clap::ArgAction::SetTrue),
                 )
                 .arg(
+                    Arg::new("optimization")
+                        .long("optimization")
+                        .short('O')
+                        .help("Set optimization level 0-3")
+                        .value_name("LEVEL"),
+                )
+                .arg(
                     Arg::new("libs")
                         .short('L')
                         .long("libs")
@@ -578,6 +586,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
             } else {
                 vec![]
             };
+            let optimization: OptLevel = sub.get_one::<String>("optimization").into();
 
             let data = LinkJobData {
                 output,
@@ -587,6 +596,7 @@ This is a temporary build - critical breaking changes WILL occur. Be warned.
                 libs,
                 entry,
                 dev_debug_level,
+                optimization,
                 debug: sub.get_flag("debug")
             };
 
