@@ -26,8 +26,7 @@ impl Codegen {
 
     fn create_target_machine(&self) -> TargetMachine {
         let target = Target::from_triple(&self.target_triple).unwrap();
-        let target_machine = target
-            .create_target_machine(
+        target.create_target_machine(
                 &self.target_triple,
                 "generic",
                 "",
@@ -35,8 +34,7 @@ impl Codegen {
                 self.reloc_mode,
                 self.code_model
             )
-            .expect("Failed to create target machine");
-        target_machine
+            .expect("Failed to create target machine")
     }
 
     pub fn optimize(&self, module: &Module, opt_level: &OptLevel, dev_debug_level: DevDebugLevel) {

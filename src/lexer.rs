@@ -365,6 +365,22 @@ impl Scanner {
         self.this_as_codepos()
             .expect("This should not happen -> constructing code pos")
     }
+    
+    fn content_to_token(&self, w: String, token_type: TokenType, start_pos: usize) -> Token {
+        let w_len = w.len();
+        Token {
+            content: w,
+            token_type,
+            code_position: CodePosition {
+                idx_start: start_pos,
+                idx_end: self.cursor,
+                line_start: self.line,
+                line_end: self.line,
+                line_idx_start: self.line_idx - w_len,
+                line_idx_end: self.line_idx,
+            }
+        }
+    }
 }
 
 fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
@@ -447,11 +463,11 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
 
                 // If the next character is a digit, parse a (possibly floating-point) literal
                 if let Some(next) = scanner.peek() {
-                    if next.is_digit(10) {
+                    if next.is_ascii_digit() {
                         let mut is_float = false;
                         // consume all digits, and at most one '.'
                         while let Some(&c) = scanner.peek() {
-                            if c.is_digit(10) {
+                            if c.is_ascii_digit() {
                                 scanner.pop();
                             } else if c == '.' && !is_float {
                                 is_float = true;
@@ -470,19 +486,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                         } else {
                             TokenType::NumberInt
                         };
-                        return Ok(Some(Token {
-                            content: number.clone(),
-                            token_type,
-                            code_position: CodePosition {
-                                idx_start: start_pos,
-                                idx_end: scanner.cursor,
-                                line_start: scanner.line,
-                                line_end: scanner.line,
-                                // line_idx_start should back up by the full literal length
-                                line_idx_start: scanner.line_idx - number.len(),
-                                line_idx_end: scanner.line_idx,
-                            },
-                        }));
+                        return Ok(Some(scanner.content_to_token(number.clone(), token_type, start_pos)));
                     }
                 }
 
@@ -533,6 +537,9 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 if let Some('>') = scanner.peek() {
                     scanner.pop();
                     return Ok(scanner.this_as_token(TokenType::Malloc));
+                } else if let Some('|') = scanner.peek() {
+                    scanner.pop();
+                    return Ok(scanner.this_as_token(TokenType::Or));
                 }
                 return Ok(scanner.this_as_token(TokenType::Pipe));
             }
@@ -579,26 +586,15 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "else" => TokenType::Else,
                     _ => TokenType::Identifier,
                 };
-                return Ok(Some(Token {
-                    content: identifier.clone(),
-                    token_type,
-                    code_position: CodePosition {
-                        idx_start: start_pos,
-                        idx_end: scanner.cursor,
-                        line_start: scanner.line,
-                        line_end: scanner.line,
-                        line_idx_start: scanner.line_idx - identifier.len(),
-                        line_idx_end: scanner.line_idx,
-                    },
-                }));
+                return Ok(Some(scanner.content_to_token(identifier.clone(), token_type, start_pos)));
             }
 
             // Numbers
-            c if c.is_digit(10) => {
+            c if c.is_ascii_digit() => {
                 let start_pos = scanner.cursor;
                 let mut is_float = false;
                 while let Some(next) = scanner.peek() {
-                    if next.is_digit(10) {
+                    if next.is_ascii_digit() {
                         scanner.pop();
                     } else if *next == '.' && !is_float {
                         is_float = true;
@@ -615,18 +611,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                 } else {
                     TokenType::NumberInt
                 };
-                return Ok(Some(Token {
-                    content: number.clone(),
-                    token_type,
-                    code_position: CodePosition {
-                        idx_start: start_pos,
-                        idx_end: scanner.cursor,
-                        line_start: scanner.line,
-                        line_end: scanner.line,
-                        line_idx_start: scanner.line_idx - number.len(),
-                        line_idx_end: scanner.line_idx,
-                    },
-                }));
+                return Ok(Some(scanner.content_to_token(number.clone(), token_type, start_pos)));
             }
 
             // Strings

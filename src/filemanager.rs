@@ -35,14 +35,14 @@ impl FileManager {
             ))
         } else {
             let content = fs::read_to_string(&file_path);
-            if content.is_err() {
-                Err(CompilerError::FileCorrupted(input_file))
-            } else {
+            if let Ok(content) = content {
                 Ok(Self {
                     input_file,
-                    file_path: file_path,
-                    content: content.unwrap(),
+                    file_path,
+                    content,
                 })
+            } else {
+                Err(CompilerError::FileCorrupted(input_file))
             }
         }
     }

@@ -97,13 +97,13 @@ fn basic_value_box_into_float<'a>(value: Box<(dyn BasicValue<'a> + 'a)>) -> Floa
 pub struct Compiler<'ctx> {
     context: &'ctx Context,
     builder: &'ctx Builder<'ctx>,
-    module_name: String,
+    _module_name: String,
     file_manager: &'ctx FileManager
 }
 
 impl<'ctx> Compiler<'ctx> {
     pub fn new(context: &'ctx Context, builder: &'ctx Builder<'ctx>, module_name: String, file_manager: &'ctx FileManager) -> Self {
-        Self { context, builder, module_name, file_manager }
+        Self { context, builder, _module_name: module_name, file_manager }
     }
 
     fn convert_type_normal(&self, typ: &TypesKind, global_scope: &Namespace, cpos: CodePosition) -> CodeResult<BasicTypeEnum> {
@@ -1141,7 +1141,7 @@ impl<'ctx> Compiler<'ctx> {
         let fn_type = self.convert_type_function(&return_type.kind, params.iter().map(|x| {x.1.kind.clone()}).collect(), global_scope, name.code_position)?;
         if let Some((_, already_defined, _)) = global_scope.functions.get(&name.content) { 
             if *already_defined {
-                return Err(CodeError::already_exists(true, name))
+                return Err(CodeError::already_exists(name))
             }
         }
         

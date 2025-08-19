@@ -1,15 +1,20 @@
 use crate::comp_errors::{CodeError, CodeWarning};
 use crate::filemanager::FileManager;
-use annotate_snippets::{Level, Renderer};
+use annotate_snippets::{Level, Renderer, Snippet};
+use crate::lexer::CodePosition;
+
+fn make_alive_snippet(snip: Snippet, offset: usize, position: CodePosition, pointer: Option<String>) -> Snippet {
+    snip.annotation(match pointer {
+        None => Level::Error.span(position.range(offset)),
+        Some(_) => Level::Error
+            .span(position.range(offset))
+            .label(pointer.unwrap().leak()),
+    })
+}
 
 pub fn print_code_error(code_error: CodeError, file_manager: &FileManager) {
     let (mut snip, offset) = file_manager.get_code_snippet(&code_error.position);
-    snip = snip.annotation(match code_error.pointer {
-        None => Level::Error.span(code_error.position.range(offset)),
-        Some(_) => Level::Error
-            .span(code_error.position.range(offset))
-            .label(code_error.pointer.unwrap().leak()),
-    });
+    snip = make_alive_snippet(snip, offset, code_error.position, code_error.pointer);
 
     let mut snippets = vec![snip];
 
@@ -38,12 +43,7 @@ pub fn print_code_error(code_error: CodeError, file_manager: &FileManager) {
 
 pub fn print_code_warn(code_warn: CodeWarning, file_manager: &FileManager) {
     let (mut snip, offset) = file_manager.get_code_snippet(&code_warn.position);
-    snip = snip.annotation(match code_warn.pointer {
-        None => Level::Warning.span(code_warn.position.range(offset)),
-        Some(_) => Level::Warning
-            .span(code_warn.position.range(offset))
-            .label(code_warn.pointer.unwrap().leak()),
-    });
+    snip = make_alive_snippet(snip, offset, code_warn.position, code_warn.pointer);
 
     let mut footers = vec![Level::Warning.title(code_warn.footer.as_str())];
 

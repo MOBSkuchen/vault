@@ -4,7 +4,7 @@ use crate::lexer::{CodePosition, Token, TokenType};
 use colorize_rs::AnsiColor;
 use std::fmt;
 use num_derive::FromPrimitive;
-use crate::parser::{format_virtual_type_sig, Expression, ModuleAccessVariant, TypesKind, VirtualDirectiveArgType};
+use crate::parser::{format_virtual_type_sig, ModuleAccessVariant, TypesKind, VirtualDirectiveArgType};
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -84,7 +84,6 @@ pub enum CodeErrorType {
 pub enum CodeWarningType {
     DeadCode,
     UnnecessaryCode,
-    DiscouragedPractice,
     DirectiveWarning
 }
 
@@ -225,15 +224,18 @@ impl CodeError {
         )
     }
 
-    pub fn invalid_types_expression(cpos: CodePosition, types_kind: TypesKind, valid: &Vec<TypesKind>) -> Self {
+    pub fn invalid_types_expression(cpos: CodePosition, types_kind: TypesKind, valid: &[TypesKind]) -> Self {
+        let p = valid.iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<String>>()
+            .join(", ");
         Self::new(
             cpos,
             CodeErrorType::InvalidTypedExpression,
             "Expression type is invalid".to_string(),
             Some("This expression".to_string()),
             format!("This expression may not have the type {types_kind}"),
-            // TODO: Show valid types here
-            vec![format!("The following ones are valid: TODO", )]
+            vec![format!("The following ones are valid: {p}")]
         )
     }
 
@@ -577,7 +579,7 @@ impl CodeError {
         )
     }
 
-    pub fn already_exists(f: bool, symbol: &Token) -> Self {
+    pub fn already_exists(symbol: &Token) -> Self {
         Self::new(
             symbol.code_position,
             CodeErrorType::AlreadyExists,

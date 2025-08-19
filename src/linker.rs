@@ -5,14 +5,15 @@ type LinkerResult = Result<(), String>;
 // Subsystem for windows builds
 pub enum ProdType {
     Console,
-    Window
+    // TODO: Implement Window for windows
+    // Window 
 }
 
 impl ProdType {
-    pub fn to_arg(self) -> String {
+    pub fn to_arg(&self) -> String {
         format!("/subsystem:{}", match self {
             ProdType::Console => "console",
-            ProdType::Window => "window"
+            // ProdType::Window => "window"
         })
     }
 }
