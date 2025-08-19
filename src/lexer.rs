@@ -556,6 +556,7 @@ fn tokenizer(scanner: &mut Scanner) -> CodeResult<Option<Token>> {
                     "import" => TokenType::Import,
                     "extern" => TokenType::Extern,
                     "let" => TokenType::Let,
+                    "for" => TokenType::For,
                     "private" => TokenType::Private,
                     "return" => TokenType::Return,
                     "break" => TokenType::Break,

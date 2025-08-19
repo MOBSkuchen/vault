@@ -264,7 +264,7 @@ impl<'a> Parser<'a> {
 
             statements.push(*Box::new(stmt));
 
-            if !self.match_token(pointer, TokenType::SemiColon)? {
+            if !self.match_token(pointer, TokenType::SemiColon)? && (self.previous(pointer).unwrap().token_type != TokenType::RBrace) {
                 break;
             }
         }
@@ -382,6 +382,25 @@ impl<'a> Parser<'a> {
                         None,
                     ));
                     Ok(AST::Expression { expr: res? })
+                }
+                TokenType::For => {
+                    let cpos = self.tokens[*pointer].code_position;
+                    self.consume(pointer, TokenType::For, None)?;
+                    let downwards = self.match_token(pointer, TokenType::Minus)?;
+                    let iterator_name = self.consume(pointer, TokenType::Identifier, None)?;
+                    self.consume(pointer, TokenType::Colon, None)?;
+                    let iterator = self.parse_expression(pointer)?;
+                    let cpos = cpos.merge(iterator.code_position);
+
+                    let body = self.parse_block(pointer)?;
+
+                    Ok(AST::IterateLoop {
+                        iterator_name,
+                        iterator,
+                        cpos,
+                        body,
+                        downwards
+                    })
                 }
                 TokenType::Let => {
                     self.advance(pointer);
@@ -1123,6 +1142,13 @@ pub enum AST<'a> {
     Struct {
         name: &'a Token,
         members: Vec<(&'a Token, Types)>
+    },
+    IterateLoop {
+        iterator_name: &'a Token,
+        iterator: Expression<'a>,
+        cpos: CodePosition,
+        body: Vec<AST<'a>>,
+        downwards: bool,
     },
     Directive(Directive<'a>),
     Import { module: & 'a Token, path: Option< & 'a Token>, name: Option<& 'a Token> },

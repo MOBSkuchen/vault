@@ -20,13 +20,14 @@ fn is_type_signed(typ: &TypesKind) -> bool {
     !matches!(typ, TypesKind::U32 | TypesKind::U64 | TypesKind::U8 | TypesKind::Bool)
 }
 
-fn hinted_int<'a>(hint: Option<&TypesKind>, ctx: &'a Context) -> (IntType<'a>, TypesKind) {
+fn hinted_int<'a>(hint: Option<&TypesKind>, ctx: &'a Context, is_signed: bool) -> (IntType<'a>, TypesKind) {
     match hint {
         Some(h) => {
             match h {
-                TypesKind::I64 | TypesKind::U64 => (ctx.i64_type(), h.to_owned()),
-                TypesKind::U8 => (ctx.i8_type(), h.to_owned()),
-                TypesKind::U32 => (ctx.i32_type(), h.to_owned()),
+                TypesKind::U64 if !is_signed => (ctx.i64_type(), TypesKind::U64),
+                TypesKind::I64 => (ctx.i64_type(), TypesKind::I64),
+                TypesKind::U8 => (ctx.i8_type(), TypesKind::U8),
+                TypesKind::U32 => (ctx.i32_type(), TypesKind::U32),
                 _ => (ctx.i32_type(), TypesKind::I32),
             }
         } None => (ctx.i32_type(), TypesKind::I32)
@@ -260,14 +261,14 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    fn resolve_mav_as_module<'a>(&self, mav: &ModuleAccessVariant, scope: &'a Namespace<'a>) -> CodeResult<&'a Namespace<'a>> {
+    fn resolve_mav_as_module<'a>(mav: &ModuleAccessVariant, scope: &'a Namespace<'a>) -> CodeResult<&'a Namespace<'a>> {
         match mav {
             ModuleAccessVariant::Base { name, cpos } => {
                 Ok(scope.modules.get(name).ok_or_else(|| { CodeError::prim_module_not_found(name, *cpos) })?)
             }
             ModuleAccessVariant::Double(a, b) => {
-                let ns1 = self.resolve_mav_as_module(a, scope)?;
-                let ns2 = self.resolve_mav_as_module(b, ns1)?;
+                let ns1 = Self::resolve_mav_as_module(a, scope)?;
+                let ns2 = Self::resolve_mav_as_module(b, ns1)?;
                 Ok(ns2)
             }
         }
@@ -280,7 +281,7 @@ impl<'ctx> Compiler<'ctx> {
                     .ok_or_else(|| { CodeError::prim_symbol_not_found(name, *cpos) })?)
             }
             ModuleAccessVariant::Double(a, b) => {
-                let ns = self.resolve_mav_as_module(a, scope)?;
+                let ns = Self::resolve_mav_as_module(a, scope)?;
                 Ok(self.resolve_mav(b, None, ns)?)
             }
         }
@@ -293,7 +294,7 @@ impl<'ctx> Compiler<'ctx> {
                     .ok_or_else(|| { CodeError::prim_symbol_not_found(name, *cpos) })?)
             }
             ModuleAccessVariant::Double(a, b) => {
-                let ns = self.resolve_mav_as_module(a, scope)?;
+                let ns = Self::resolve_mav_as_module(a, scope)?;
                 Ok(self.resolve_mav_func(b, None, ns)?)
             }
         }
@@ -306,7 +307,7 @@ impl<'ctx> Compiler<'ctx> {
                     .ok_or_else(|| { CodeError::prim_symbol_not_found(name, *cpos) })?)
             }
             ModuleAccessVariant::Double(a, _) => {
-                let ns = self.resolve_mav_as_module(a, scope)?;
+                let ns = Self::resolve_mav_as_module(a, scope)?;
                 Ok(ns)
             }
         }
@@ -315,6 +316,7 @@ impl<'ctx> Compiler<'ctx> {
     fn get_as_index_expr<'a>(&'a self, function: &'a Function<'a>, global_scope: &'a Namespace<'a>, expr: Expression, valid: Vec<TypesKind>, recommend: TypesKind) -> CodeResult<(Box<dyn BasicValue + 'a>, TypesKind)> {
         let cpos = expr.code_position;
         let (value, typ) = self.visit_expr(function, global_scope, expr, Some(&recommend), true)?;
+        // TODO: Fix
         if matches!(&typ, valid) {
             Ok((Box::new(value.as_basic_value_enum()), typ))
         } else {
@@ -329,14 +331,12 @@ impl<'ctx> Compiler<'ctx> {
                 let def = self.resolve_mav(&mav, Some(&function.function_scope), global_scope)?;
                 self.throw_dead_value(def.1.as_basic_value_enum(), expr.code_position, function.modifiers.contains(&FnSignals::AllowDeadValue))?;
                 match &def.0 {
-                    TypesKind::Struct { .. } | TypesKind::Array { .. } => {
+                    TypesKind::Struct { .. } => {
                         return Ok((Box::new(def.1), TypesKind::Ptr(Box::new(def.0.clone()))))
                     },
-                    TypesKind::Ptr(x) => {
-                        if matches!(x.deref(), TypesKind::Array {..}) {
-                            return Ok((Box::new(def.1), *x.clone()))
-                        }
-                    },
+                    TypesKind::Array { .. } => {
+                        return Ok((Box::new(def.1), def.0.clone()))
+                    }
                     _ => {}
                 };
                 let real_type = self.convert_type_normal(&def.0, global_scope, mav.ensured_compute_codeposition())?;
@@ -345,7 +345,8 @@ impl<'ctx> Compiler<'ctx> {
                 (Box::new(value), def.0.clone())
             }
             ExpressionKind::IntNumber { value, .. } => {
-                let (hint, vt) = hinted_int(type_hint, self.context);
+                let is_signed = value < 0;
+                let (hint, vt) = hinted_int(type_hint, self.context, is_signed);
                 (Box::new(hint.const_int(value as u64, is_type_signed(&vt)).as_basic_value_enum()), vt)
             }
             ExpressionKind::FloatNumber { value, .. } => {
@@ -676,12 +677,7 @@ impl<'ctx> Compiler<'ctx> {
                 let child_cpos = child.code_position;
                 let (value, child_type) = self.visit_expr(function, global_scope, *child, None, true)?;
                 let inner_type = match &child_type {
-                    TypesKind::Ptr(ptr) => {
-                        match ptr.deref() {
-                            TypesKind::Array { inner, .. } => inner.deref(),
-                            _ => ptr.deref(),
-                        }
-                    }
+                    TypesKind::Ptr(ptr) => { ptr.deref() }
                     TypesKind::Array { inner, .. } => inner.deref(),
                     _ => return Err(CodeError::array_index(child_cpos))
                 };
@@ -709,7 +705,14 @@ impl<'ctx> Compiler<'ctx> {
 
                 self.fill_array(function, ptr, value.as_basic_value_enum(), llvm_type, size, size_llvm_type.into_int_type());
 
-                (Box::new(ptr), TypesKind::Array {inner: Box::new(inner_type), size: None})
+                let mut ty = TypesKind::Array {inner: Box::new(inner_type), size: None};
+                if let Some(type_hnt) = type_hint {
+                    if ty == *type_hnt {
+                        ty = type_hnt.clone()
+                    }
+                }
+
+                (Box::new(ptr), ty)
             }
         })
     }
@@ -772,6 +775,12 @@ impl<'ctx> Compiler<'ctx> {
         } else {Ok(())}
     }
 
+    fn visit_expr_notrace(&self, function: &Function, global_scope: &Namespace<'_>, expr: Expression,
+                              type_hint: Option<&TypesKind>, must_use: bool) -> CodeResult<(BasicValueEnum, TypesKind)> {
+        let (value, typ) = self.visit_expr(function, global_scope, expr, type_hint, must_use)?;
+        Ok((unsafe {BasicValueEnum::new(value.as_value_ref())}, typ))
+    }
+
     fn visit_statement<'a>(&'ctx self, function: &mut Function<'ctx>, statement: AST, global_scope: &mut Namespace<'a>, loop_after_block: Option<BasicBlock>, cur_block: Option<&BasicBlock>) -> CodeResult<(bool, bool)> where 'ctx: 'a {
         let mut inside_loop = loop_after_block.is_some();
         let mut returns = false;
@@ -793,7 +802,7 @@ impl<'ctx> Compiler<'ctx> {
                     };
                     let llvm_typ = self.convert_type_normal(&typ, global_scope, typ_tok)?.as_basic_type_enum();
                     // Optimization: Pointers don't have to be stored again, they already are
-                    if llvm_typ.is_pointer_type() {
+                    if llvm_typ.is_pointer_type() || llvm_typ.is_array_type() {
                         let v = expr.as_basic_value_enum().into_pointer_value().as_value_ref();
                         // Evil magic trick
                         (typ, unsafe { BasicValueEnum::new(v) }.into_pointer_value())
@@ -814,6 +823,7 @@ impl<'ctx> Compiler<'ctx> {
                 let (typ, ptr) = holder_scope.definitions.get(&name.last_name().unwrap()).ok_or_else(|| {CodeError::prim_symbol_not_found(&name.name(), name.ensured_compute_codeposition())})?;
                 let (data, got_type) = self.visit_expr(function, global_scope, value, Some(typ), true)?;
                 if got_type != *typ { return Err(CodeError::type_mismatch(cpos, &got_type, typ, vec![format!("This is because `{}` was originally declared as {typ}", name.name())])) }
+                // TODO: Check if arrays have the same size
                 self.builder.build_store(*ptr, data.as_basic_value_enum()).expect("Failed to store value of variable define");
             }
             AST::Expression { expr } => { 
@@ -840,7 +850,7 @@ impl<'ctx> Compiler<'ctx> {
                 inside_loop = true;
                 
                 let cond_block = function.new_block("cond", false);
-                let body_block = function.new_block("body", false); // <- Added body block
+                let body_block = function.new_block("body", false);
                 let after_block = function.new_block("after", false);
 
                 self.builder.build_unconditional_branch(cond_block).expect("Failed to enter cond block");
@@ -1032,6 +1042,72 @@ impl<'ctx> Compiler<'ctx> {
             } else {
                 return Err(CodeError::loop_stmt_outside_loop(&tok.code_position, &tok.token_type))
             },
+            AST::IterateLoop { iterator_name, iterator, cpos, body, downwards } => {
+                inside_loop = true;
+
+                let iterator_ptr = self.builder.build_alloca(self.context.i64_type(), "").expect("Failed to alloca iterator");
+                function.function_scope.definitions.insert(iterator_name.content.clone(), (TypesKind::U64, iterator_ptr));
+
+                let cond_block = function.new_block("cond", false);
+                let body_block = function.new_block("body", false);
+                let after_block = function.new_block("after", false);
+
+                let (value, typ) = self.visit_expr_notrace(function, global_scope, iterator, Some(&TypesKind::U64), true)?;
+                let max = match typ {
+                    TypesKind::U32 | TypesKind::U64 | TypesKind::U8 => {
+                        value.as_basic_value_enum().into_int_value()
+                    }
+                    _ => {
+                        return Err(CodeError::invalid_iterator_type(cpos, typ))
+                    }
+                };
+
+                let num = if downwards {
+                    if typ != TypesKind::U64 {
+                        self.builder.build_int_cast(max, self.context.i64_type(), "").expect("Failed to adjust int into space (i64)")
+                    } else {
+                        max
+                    }
+                } else {self.context.i64_type().const_int(0, false)};
+                self.builder.build_store(iterator_ptr, num).expect("Failed to init iterator");
+
+                self.builder.build_unconditional_branch(body_block).expect("Failed to enter cond block");
+                self.builder.position_at_end(cond_block);
+
+                let itr = self.builder.build_load(self.context.i64_type(), iterator_ptr, "").expect("Failed to build load");
+
+                let val = if downwards {
+                    self.builder.build_int_sub(itr.as_basic_value_enum().into_int_value(), self.context.i64_type().const_int(1, false), "").expect("Failed to dec iterator")
+                }
+                else {
+                    self.builder.build_int_add(itr.as_basic_value_enum().into_int_value(), self.context.i64_type().const_int(1, false), "").expect("Failed to inc iterator")
+                };
+                self.builder.build_store(iterator_ptr, val).expect("Failed to init iterator");
+                let condition = if downwards {
+                    self.builder.build_int_compare(IntPredicate::UGT, val, self.context.i64_type().const_int(0, false), "").expect("Failed to build UGT in for loop")
+                }
+                else {
+                    self.builder.build_int_compare(IntPredicate::ULT, val, max, "").expect("Failed to build ULT in for loop")
+                };
+                self.builder.build_conditional_branch(condition, body_block, after_block)
+                    .expect("Failed to make conditional branch");
+
+                self.builder.position_at_end(body_block);
+
+                for stmt in body {
+                    let (il, rets) = self.visit_statement(function, stmt, global_scope, Some(after_block), Some(&body_block))?;
+                    if !il || rets {
+                        inside_loop = false;
+                        break;
+                    }
+                }
+
+                self.builder.build_unconditional_branch(cond_block)
+                    .expect("Failed to branch back to condition");
+
+                self.builder.position_at_end(after_block);
+                return Ok((inside_loop, false));
+            },
             _ => unreachable!(),
         }
         Ok((inside_loop, returns))
@@ -1053,6 +1129,7 @@ impl<'ctx> Compiler<'ctx> {
             AST::Directive(d) => d.code_position,
             AST::Import { module: m, .. } => m.code_position,
             AST::AccessReassign { expr, value } => expr.code_position.merge(value.code_position),
+            AST::IterateLoop { cpos, .. } => { *cpos }
         }
     }
 
@@ -1099,10 +1176,19 @@ impl<'ctx> Compiler<'ctx> {
         if let Some(body) = body {
             let entry = function.new_block("entry", true);
             // Function params
+            // Do not try to store pointers again. That results in disaster.
             for (i, param) in params.iter().enumerate() {
-                let value = function.function_value.get_nth_param(i as u32).unwrap();
-                let ptr = self.builder.build_alloca(value.get_type(), "").expect("Failed to build alloca");
-                self.builder.build_store(ptr, value).expect("Failed to store param");
+                let ptr = match param.1.kind {
+                    TypesKind::Ptr(_) | TypesKind::Pointer | TypesKind::Struct { .. } | TypesKind::Array { .. } => {
+                        function.function_value.get_nth_param(i as u32).unwrap().into_pointer_value()
+                    },
+                    _ => {
+                        let value = function.function_value.get_nth_param(i as u32).unwrap();
+                        let ptr = self.builder.build_alloca(value.get_type(), "").expect("Failed to build alloca");
+                        self.builder.build_store(ptr, value).expect("Failed to store param");
+                        ptr
+                    }
+                };
                 function.function_scope.definitions.insert(param.0.content.clone(), (param.1.kind.clone(), ptr));
             }
             

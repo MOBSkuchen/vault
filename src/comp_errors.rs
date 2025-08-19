@@ -77,6 +77,7 @@ pub enum CodeErrorType {
     ArrayIndexNotOnArray,
     InvalidTypedExpression,
     UseOfDeadValue,
+    InvalidIteratorType
 }
 
 #[derive(Debug)]
@@ -217,10 +218,10 @@ impl CodeError {
         Self::new(
             cpos,
             CodeErrorType::ArrayIndexNotOnArray,
-            "Array index on generic pointer".to_string(),
+            "Array index on non-array".to_string(),
             Some("This expression".to_string()),
-            "You may only index arrays (pointers to arrays, which are just typed pointers)".to_string(),
-            vec!["You may be using a generic pointer to refer to an array. You should cast it into [..]*".to_string()],
+            "You may only index arrays (which are just array-typed pointers)".to_string(),
+            vec!["You may be using a pointer to refer to an array. You should cast it into [..]".to_string()],
         )
     }
 
@@ -501,6 +502,17 @@ impl CodeError {
             Some(format!("This is of type `{typ}` (signed)")),
             "Malloc requires a non-zero value, e.g. an unsinged integer".to_string(),
             vec![]
+        )
+    }
+
+    pub fn invalid_iterator_type(code_position: CodePosition, typ: TypesKind) -> Self {
+        Self::new(
+            code_position,
+            CodeErrorType::InvalidIteratorType,
+            "Invalid iterator type".to_string(),
+            Some(format!("For-loop iterator of type `{typ}`")),
+            "For-loops require an iterator, which must be an unsigned integer (non-negative)".to_string(),
+            vec!["If you are trying to create a backwards loop, you may place a '-' in front of the iterator name".to_string()]
         )
     }
 
